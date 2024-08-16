@@ -3,8 +3,8 @@
         insn/insn {:mvn/version "0.5.4"}
         cheshire/cheshire {:mvn/version "5.13.0"}
         me.raynes/fs {:mvn/version "1.4.6"}
-        wiredaemon/zigclj {:mvn/version "0.13.3"}
-        ;wiredaemon/zigclj-native-macos-aarch64 {:mvn/version "0.13.0"}
+        wiredaemon/zigclj {:mvn/version "0.13.4"}
+        wiredaemon/zigclj-native-windows-x86_64 {:mvn/version "0.13.0"}
         }
 
  :aliases
