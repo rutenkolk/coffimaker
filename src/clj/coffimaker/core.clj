@@ -34,6 +34,7 @@
     target-file))
 
 (defn c-header-info [header opts]
+  (z/prepare-zig!)
   (let [header-name (rfs/name (io/file header))
         tmp (rfs/temp-dir "coffimaker")
         _ (copy-resource-to "coffimaker.zig" tmp)
