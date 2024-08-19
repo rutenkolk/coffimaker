@@ -9,7 +9,11 @@
    [clj-http.client :as client]
    [me.raynes.fs :as rfs]
    [zigclj.core :as z]
-   [clojure.edn :as edn])
+   [clojure.edn :as edn]
+   [coffi.ffi :as ffi]
+   [coffi.mem :as mem]
+   [coffi.layout :as layout]
+   )
   (:import
    (clojure.lang
     IDeref IFn IMeta IObj IReference)
@@ -55,6 +59,51 @@
 (defmacro defconst [name & decls]
   (list* `def (with-meta name (assoc (meta name) :const true)) decls))
 
+(defn- f32     [name] [name ::mem/float])
+(defn- uchar   [name] [name ::mem/char])
+(defn- i8      [name] [name ::mem/byte])
+(defn- i16     [name] [name ::mem/short])
+(defn- i32     [name] [name ::mem/int])
+(defn- ui8     [name] [name ::mem/byte])
+(defn- ui16    [name] [name ::mem/short])
+(defn- ui32    [name] [name ::mem/int])
+(defn- u8      [name] [name ::mem/byte])
+(defn- u16     [name] [name ::mem/short])
+(defn- u32     [name] [name ::mem/int])
+(defn- bool    [name] [name ::mem/byte])
+(defn- pointer [name] [name ::mem/pointer])
+
+
+(def- primitive-typename-conversion
+  {:f32       ::mem/float
+   :uchar     ::mem/char
+   :i8        ::mem/byte
+   :i16       ::mem/short
+   :i32       ::mem/int
+   :ui8       ::mem/byte
+   :ui16      ::mem/short
+   :ui32      ::mem/int
+   :u8        ::mem/byte
+   :u16       ::mem/short
+   :u32       ::mem/int
+   :bool      ::mem/byte
+   :pointer   ::mem/pointer})
+
+(defn- typed-decl [[t declname]]
+  ;NOTE: don't use the functions, use the map
+  (cond
+    (and (vector? t) (= :pointer (first t))) 
+
+   (let [native-type-fn (if (keyword? t) (resolve (symbol (name t))) nil)
+         ]
+     (if native-type-fn
+       ((deref native-type-fn) declname)
+       [declname t]))))
+
+(defn- typename-conversion [t]
+  nil ;TODO
+  )
+
 (defn get-constant-defs [header-info]
   (->>
    header-info
@@ -65,6 +114,11 @@
 
 (defn def-constants! [header-info]
   ((cons `do (get-constant-defs header-info))))
+(defn- gen-opaque [opaques]
+  (->>
+   opaques
+   (:opaque)
+   (map (fn [v] (list `mem/defalias (symbol (name (:name v))) :coffi.mem/byte)))))
 
 (comment
   (def raylib-header-info
@@ -74,6 +128,7 @@
                                    "RL_CALLOC"  "\n"
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
+
   ((comp not resolve symbol name) :mappp)
 
   (resolve (symbol "map"))
@@ -81,7 +136,10 @@
   (->>
    raylib-header-info
    (group-by :type)
-   (:constant)
+   (:type)
+   (group-by :kind)
+   (:struct)
+   (map (fn [v] (list `mem/defalias (keyword (name (:name v))) (list `layout/with-c-layout [::mem/struct (map typed-decl (:members v))]))))
    )
 
   (->>
