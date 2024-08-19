@@ -9,7 +9,6 @@
    [clj-http.client :as client]
    [me.raynes.fs :as rfs]
    [zigclj.core :as z]
-
    [clojure.edn :as edn])
   (:import
    (clojure.lang
@@ -48,15 +47,50 @@
     (->
      (with-sh-dir (str tmp) (z/zig :build :run))
      (:err)
-     (clojure.edn/read-string))))
+     (edn/read-string))))
+
+(defmacro def- [name & decls]
+  (list* `def (with-meta name (assoc (meta name) :private true)) decls))
+
+(defmacro defconst [name & decls]
+  (list* `def (with-meta name (assoc (meta name) :const true)) decls))
+
+(defn get-constant-defs [header-info]
+  (->>
+   header-info
+   (:constant)
+   (filter (comp not resolve symbol name :name))
+   (filter #(not (#{:true :false} (:name %))))
+   (map (fn [v] (list 'defconst (symbol (name (:name v))) (:value v))))))
+
+(defn def-constants! [header-info]
+  ((cons `do (get-constant-defs header-info))))
 
 (comment
-  (c-header-info
-   "../raylib/src/raylib.h"
-   {:compile-error-replacements {"RL_MALLOC"  "\n"
-                                 "RL_CALLOC"  "\n"
-                                 "RL_REALLOC" "\n"
-                                 "RL_FREE"    "\n"}})
+  (def raylib-header-info
+    (c-header-info
+     "../raylib/src/raylib.h"
+     {:compile-error-replacements {"RL_MALLOC"  "\n"
+                                   "RL_CALLOC"  "\n"
+                                   "RL_REALLOC" "\n"
+                                   "RL_FREE"    "\n"}}))
+  ((comp not resolve symbol name) :mappp)
+
+  (resolve (symbol "map"))
+
+  (->>
+   raylib-header-info
+   (group-by :type)
+   (:constant)
+   )
+
+  (->>
+   raylib-header-info
+   (group-by :type)
+   (get-constant-defs)
+
+       )
+
 
   )
 
