@@ -125,11 +125,20 @@
 (defn def-constants! [header-info]
   ((cons `do (get-constant-defs header-info))))
 
-(defn- gen-opaque [opaques]
+(defn- gen-opaque [types]
   (->>
-   opaques
+   info
    (:opaque)
    (map (fn [v] (list `mem/defalias (symbol (name (:name v))) :coffi.mem/byte)))))
+
+(defn- gen-structs [types]
+  (->>
+   types
+   (:struct)
+   (map (fn [v] (list
+     `mem/defalias
+     (keyword (name (:name v)))
+     (list `layout/with-c-layout [::mem/struct (map typed-decl (:members v))]))))))
 
 (comment
   (def raylib-header-info
@@ -139,27 +148,42 @@
                                    "RL_CALLOC"  "\n"
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
-
-  ((comp not resolve symbol name) :mappp)
-
-  (resolve (symbol "map"))
-
   (->>
    raylib-header-info
    (group-by :type)
    (:type)
    (group-by :kind)
-   (:struct)
-   (map (fn [v] (list `mem/defalias (keyword (name (:name v))) (list `layout/with-c-layout [::mem/struct (map typed-decl (:members v))]))))
+   (gen-structs)
    )
 
   (->>
    raylib-header-info
    (group-by :type)
    (get-constant-defs)
+   )
 
-       )
+  ;TODO: struct serialization from vectors / arrays
 
+(defn- duplicate-member-name-as-keyword-and-symbol [in]
+  (let [[member-name _] (eval in)] [member-name (symbol (name member-name))]))
+
+
+   (defmacro serialize-into-with-vector [type-name members]
+     `(defmethod mem/serialize-into ~(keyword "raylib-clj.core" (name type-name))
+        [~'obj ~'_ ~'segment ~'session]
+        (let [~'serializing-map
+              (if (vector? ~'obj)
+                (let [~(->> members (map (comp symbol name first eval)) (vec)) ~'obj]
+                  ~(->> members (map duplicate-member-name-as-keyword-and-symbol) (into (hash-map))))
+                ~'obj)]
+          (mem/serialize-into
+           ~'serializing-map
+           (layout/with-c-layout
+             [::mem/struct ~(eval members)])
+           ~'segment
+           ~'session))))
+
+   (macroexpand-1 '(serialize-into-with-vector :vec2 [(f32 :x) (f32 :y)]))
 
   )
 
