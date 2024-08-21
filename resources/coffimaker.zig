@@ -1,7 +1,7 @@
 const std = @import("std");
 const print = std.debug.print;
 const os = std.os;
-const c = @import("<<__ZIGCLJ_TRANSLATED_HEADER__>>");
+const c = @import("raylib.zig");
 
 pub fn print_native_type_conversion(T: type) void {
     std.debug.print(" \"{s}\" \"{s}\"", .{
@@ -24,7 +24,7 @@ pub fn print_all_native_type_conversions() void {
 }
 
 pub fn namespaced_declname(parent: type, decl: DeclInfo) []const u8 {
-    return @typeName(parent) ++ "." ++ decl.name;
+    return @typeName(parent) ++ "/" ++ decl.name;
 }
 
 pub fn main() void {
@@ -205,7 +205,7 @@ fn print_custom_typename(T: type) void {
                     }
                 },
                 else => {
-                    std.debug.print(":{s}", .{zig_native_typename(T)});
+                    print_zig_native_typename(T);
                 },
             }
         },
@@ -221,18 +221,25 @@ fn print_custom_typename(T: type) void {
             std.debug.print("]", .{});
         },
         inline else => {
-            //std.debug.print(":{s}", .{@typeName(T)});
-            std.debug.print(":{s}", .{zig_native_typename(T)});
+            print_zig_native_typename(T);
         },
     }
 }
 
-fn zig_native_typename(T: type) []const u8 {
+fn print_zig_native_typename(T: type) void {
     const name = @typeName(T);
     if (name.len > 2 and std.mem.eql(u8, name[0..2], "c_")) {
-        return @typeName(@Type(@typeInfo(T)));
+        std.debug.print(":{s}", .{@typeName(@Type(@typeInfo(T)))});
+    } else if (std.mem.containsAtLeast(u8, name, 1, ".")) {
+        var it = std.mem.split(u8, name, ".");
+        while (it.next() != null) {
+            if (it.peek() != null) {
+                const last_dot = it.index.? - 1;
+                std.debug.print(":{s}/{s}", .{ name[0..last_dot], it.rest() });
+            }
+        }
     } else {
-        return @typeName(T);
+        std.debug.print(":{s}", .{name});
     }
 }
 
