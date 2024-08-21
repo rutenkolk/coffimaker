@@ -75,34 +75,32 @@
 
 
 (def- primitive-typename-conversion
-  {:f32       ::mem/float
-   :uchar     ::mem/char
-   :i8        ::mem/byte
-   :i16       ::mem/short
-   :i32       ::mem/int
-   :ui8       ::mem/byte
-   :ui16      ::mem/short
-   :ui32      ::mem/int
-   :u8        ::mem/byte
-   :u16       ::mem/short
-   :u32       ::mem/int
-   :bool      ::mem/byte
-   :pointer   ::mem/pointer})
-
-(defn- typed-decl [[t declname]]
-  ;NOTE: don't use the functions, use the map
-  (cond
-    (and (vector? t) (= :pointer (first t))) 
-
-   (let [native-type-fn (if (keyword? t) (resolve (symbol (name t))) nil)
-         ]
-     (if native-type-fn
-       ((deref native-type-fn) declname)
-       [declname t]))))
+  {:f32            ::mem/float
+   :uchar          ::mem/char
+   :i8             ::mem/byte
+   :i16            ::mem/short
+   :i32            ::mem/int
+   :ui8            ::mem/byte
+   :ui16           ::mem/short
+   :ui32           ::mem/int
+   :u8             ::mem/byte
+   :u16            ::mem/short
+   :u32            ::mem/int
+   :bool           ::mem/byte
+   [:pointer :u8]  ::mem/c-string
+   :pointer        ::mem/pointer
+   :void-pointer   ::mem/pointer})
 
 (defn- typename-conversion [t]
-  nil ;TODO
-  )
+  (cond
+    (primitive-typename-conversion t) (primitive-typename-conversion t)
+    (keyword? t)                       (keyword (name t))
+    (not (vector? t))                  :t
+    (= :pointer (first t))             ::mem/pointer
+    (= :array (first t))              [::mem/array (typename-conversion (second t)) (nth t 2)]))
+
+(defn- typed-decl [[t declname]]
+  [declname (typename-conversion t)])
 
 (defn get-constant-defs [header-info]
   (->>
