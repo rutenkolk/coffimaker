@@ -31,16 +31,28 @@
    )
   )
 
-(defn- copy-resource-to [resource target-dir]
-  (let [target-file (rfs/file target-dir resource)]
-    (io/copy (io/input-stream (io/resource resource)) target-file)
-    target-file))
+(defn- copy-resource-to
+  "copies a resource file to a target directory, keeping it's name.
+  Optionally takes a replacement argument, that can be used to replace strings in the original resource.
+  This argument is passed directly to `clojure.string/replace`.
+  Strings to be replaced must be of the form \"<<__.*?__>>\"
+  In most cases, a map of string to string replacements is sufficient"
+  ([resource target-dir]
+   (let [target-file (rfs/file target-dir resource)]
+     (io/copy (io/input-stream (io/resource resource)) target-file)
+     target-file))
+  ([resource target-dir replacement]
+   (let [target-file (rfs/file target-dir resource)
+         raw-content (slurp (io/input-stream (io/resource resource)))
+         content (s/replace raw-content #"<<__.*?__>>" replacement)]
+     (spit target-file content)
+     target-file)))
 
 (defn c-header-info [header opts]
   (z/prepare-zig!)
   (let [header-name (rfs/name (io/file header))
         tmp (rfs/temp-dir "coffimaker")
-        _ (copy-resource-to "coffimaker.zig" tmp)
+        _ (copy-resource-to "coffimaker.zig" tmp {"<<__ZIGCLJ_TRANSLATED_HEADER__>>" (str header-name ".zig")})
         build-file (copy-resource-to "build.zig" tmp)
         translated-file (rfs/file tmp (str header-name ".zig"))]
     (spit
@@ -112,6 +124,7 @@
 
 (defn def-constants! [header-info]
   ((cons `do (get-constant-defs header-info))))
+
 (defn- gen-opaque [opaques]
   (->>
    opaques
