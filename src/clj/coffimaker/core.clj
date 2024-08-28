@@ -172,8 +172,7 @@
            clojure.lang.IPersistentVector
            (list protocol-fn ['obj 'segment]
                  (->>
-                  (partition 2 2 (interleave (reductions + 0 (map (comp mem/size-of second) fields)) fields))
-                  (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type))))))
+                  typelist
                   (map-indexed
                    (fn [index [offset [_ field-type]]]
                      (gen-serialize-into-single
@@ -182,8 +181,7 @@
            clojure.lang.IPersistentMap
            (list protocol-fn ['obj 'segment]
                  (->>
-                  (partition 2 2 (interleave (reductions + 0 (map (comp mem/size-of second) fields)) fields))
-                  (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type))))))
+                  typelist
                   (map
                    (fn [[offset [field-name field-type]]]
                      (gen-serialize-into-single
@@ -216,30 +214,15 @@
    (get-constant-defs)
    )
 
-  ;TODO: struct serialization from vectors / arrays
-
-(defn- duplicate-member-name-as-keyword-and-symbol [in]
-  (let [[member-name _] (eval in)] [member-name (symbol (name member-name))]))
-
-
-   (defmacro serialize-into-with-vector [type-name members]
-     `(defmethod mem/serialize-into ~(keyword "raylib-clj.core" (name type-name))
-        [~'obj ~'_ ~'segment ~'session]
-        (let [~'serializing-map
-              (if (vector? ~'obj)
-                (let [~(->> members (map (comp symbol name first eval)) (vec)) ~'obj]
-                  ~(->> members (map duplicate-member-name-as-keyword-and-symbol) (into (hash-map))))
-                ~'obj)]
-          (mem/serialize-into
-           ~'serializing-map
-           (layout/with-c-layout
-             [::mem/struct ~(eval members)])
-           ~'segment
-           ~'session))))
-
-   (macroexpand-1 '(serialize-into-with-vector :vec2 [(f32 :x) (f32 :y)]))
-
-
+   (mem/defalias ::CustomStructType
+     (layout/with-c-layout
+       [:coffi.mem/struct
+        '([:id :coffi.mem/int]
+          [:weird :coffi.mem/byte]
+          [:weird2 :coffi.mem/double]
+          [:width :coffi.mem/double]
+          [:mipmaps :coffi.mem/short]
+          [:format :coffi.mem/float])]))
 
    (gen-serialize-into :Texture2D
                        (coffi.layout/with-c-layout
@@ -252,32 +235,6 @@
                             [:mipmaps :coffi.mem/int]
                             [:format :coffi.mem/float])])
                        )
-
-(mem/defalias ::CustomStructType
-  (layout/with-c-layout
-   [:coffi.mem/struct
-    '([:id :coffi.mem/int]
-      [:weird :coffi.mem/byte]
-      [:weird2 :coffi.mem/double]
-      [:width :coffi.mem/double]
-      [:mipmaps :coffi.mem/short]
-      [:format :coffi.mem/float])]))
-
-   (coffi.layout/with-c-layout
-     [:coffi.mem/struct
-      '([:x :coffi.mem/float]
-        [:y :coffi.mem/float]
-        [:weird :coffi.mem/byte]
-       [:z :coffi.mem/float]
-       [:w :coffi.mem/float])])
-
-   (defmacro typehint [form type]
-     `(with-meta ~form {:tag ~type})
-     )
-
-   (defmacro string-typehint [form]
-     ^String form
-     )
 
    (defn len [x]
      (if (vector? x)
