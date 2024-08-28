@@ -71,6 +71,9 @@
 (defmacro defconst [name & decls]
   (list* `def (with-meta name (assoc (meta name) :const true)) decls))
 
+(defn vector-nth ^long [v i]
+  (.nth ^clojure.lang.IPersistentVector v ^int i))
+
 (defn- f32     [name] [name ::mem/float])
 (defn- uchar   [name] [name ::mem/char])
 (defn- i8      [name] [name ::mem/byte])
@@ -127,7 +130,7 @@
 
 (defn- gen-opaque [types]
   (->>
-   info
+   types
    (:opaque)
    (map (fn [v] (list `mem/defalias (symbol (name (:name v))) :coffi.mem/byte)))))
 
@@ -140,6 +143,46 @@
      (keyword (name (:name v)))
      (list `layout/with-c-layout [::mem/struct (map typed-decl (:members v))]))))))
 
+
+(defn gen-serialize-into-single [obj-form coffitype offset size]
+  (condp = coffitype
+    :coffi.mem/byte    (list `mem/write-byte    'segment offset obj-form)
+    :coffi.mem/short   (list `mem/write-short   'segment offset obj-form)
+    :coffi.mem/int     (list `mem/write-int     'segment offset obj-form)
+    :coffi.mem/long    (list `mem/write-long    'segment offset obj-form)
+    :coffi.mem/char    (list `mem/write-char    'segment offset obj-form)
+    :coffi.mem/float   (list `mem/write-float   'segment offset obj-form)
+    :coffi.mem/double  (list `mem/write-double  'segment offset obj-form)
+    :coffi.mem/pointer (list `mem/write-address 'segment offset obj-form)
+    (list (symbol (str "serialize-" (name coffitype))) obj-form 'struct (list `mem/slice 'segment offset size) 'session)))
+
+(defn gen-serialize-into [typename [_struct fields]]
+  (let [protocol-name (symbol (str "proto-serialize-" (name typename)))
+        protocol-fn (symbol (str "serialize-" (name typename)))
+        ]
+
+    (list
+     `do
+     (list `defprotocol protocol-name (list protocol-fn ['obj '_struct 'segment 'session]))
+     (list `extend-protocol protocol-name
+           clojure.lang.IPersistentVector
+           (list protocol-fn ['obj '_ 'segment 'session]
+                 (->>
+                  (map-indexed
+                   (fn [index [offset [_ field-type]]]
+                     (if (and (vector? field-type) (= :coffi.mem/padding (first field-type)))
+                       :no-op
+                       ;(list `mem/serialize-into (list 'vector-nth 'obj (list `int index)) field-type (list `mem/slice 'segment offset (mem/size-of field-type)))
+                       (gen-serialize-into-single (list 'vector-nth 'obj (list `int index)) field-type offset))))
+                   (partition 2 2 (interleave (reductions + 0 (map (comp mem/size-of second) fields)) fields)))
+                  (filter #(not= :no-op %))
+                  (cons `do)))
+           clojure.lang.IPersistentMap
+           (list protocol-fn ['obj '_ 'segment 'session] (list `mem/serialize-into 'obj [_struct fields] 'segment 'session)))
+     (list `defmethod `serialize-into typename
+           ['obj '_struct 'segment 'session]
+           (list protocol-fn 'obj '_struct 'segment 'session)))))
+
 (comment
   (def raylib-header-info
     (c-header-info
@@ -148,6 +191,7 @@
                                    "RL_CALLOC"  "\n"
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
+
   (->>
    raylib-header-info
    (group-by :type)
@@ -184,6 +228,112 @@
            ~'session))))
 
    (macroexpand-1 '(serialize-into-with-vector :vec2 [(f32 :x) (f32 :y)]))
+
+
+
+   (gen-serialize-into :Texture2D
+                       (coffi.layout/with-c-layout
+                         [:coffi.mem/struct
+                          '([:id :coffi.mem/int]
+                            [:width :coffi.mem/double]
+                            [:height :coffi.mem/int]
+                            ;[:some_other_struct :CustomStructType]
+                                      [:weird :coffi.mem/byte]
+                                      [:mipmaps :coffi.mem/int]
+                                      [:format :coffi.mem/float])])
+                       )
+
+(mem/defalias ::CustomStructType
+  (layout/with-c-layout
+   [:coffi.mem/struct
+    '([:id :coffi.mem/int]
+      [:weird :coffi.mem/byte]
+      [:width :coffi.mem/double]
+      [:mipmaps :coffi.mem/short]
+      [:format :coffi.mem/float])]))
+
+   (coffi.layout/with-c-layout
+     [:coffi.mem/struct
+      '([:x :coffi.mem/float]
+        [:y :coffi.mem/float]
+        [:weird :coffi.mem/byte]
+       [:z :coffi.mem/float]
+       [:w :coffi.mem/float])])
+
+   (defmacro typehint [form type]
+     `(with-meta ~form {:tag ~type})
+     )
+
+   (defmacro string-typehint [form]
+     ^String form
+     )
+
+   (defn len [x]
+     (if (vector? x)
+       (.size x)
+       (.length x)))
+
+   (defn len2 [x]
+     (if (vector? x)
+       (.size ^clojure.lang.IPersistentVector x)
+       (.length ^java.lang.String x)))
+
+   (defn len3 [x]
+     (cond
+       (vector? x) (.size ^clojure.lang.IPersistentVector x)
+       (string? x) (.length ^java.lang.String x)))
+
+   (defn len4 [x]
+     (condp = (type x)
+       clojure.lang.PersistentVector (.size ^clojure.lang.IPersistentVector x)
+       java.lang.String (.length ^java.lang.String x)))
+
+   (defprotocol proto-len5 (len5 [x]))
+   (extend-protocol proto-len5
+     clojure.lang.IPersistentVector (len5 [x] (.size ^clojure.lang.IPersistentVector x))
+     java.lang.String (len5 [x] (.length ^java.lang.String x)))
+
+   (defn vecsize [x]
+     (.size ^clojure.lang.IPersistentVector x))
+   (defn strlen [x]
+     (.length ^java.lang.String x))
+
+
+   (let [testvec [57 856 25  856 25 "hallo" "test" 0.4 1.9 2]
+         teststring "ergdrgnsdng"
+         n 64000000
+         testcoll_vec (vec (repeat (int (/ n 16)) testvec))
+         testcoll_str (vec (repeat (* 15 (int (/ n 16))) teststring))
+         testcoll (vec (interleave testcoll_vec testcoll_str))
+         _ (println (.repeat "-" 80))
+         _ (print "t1: ")
+         t1 (time (reduce + (map len  testcoll)))
+         _ (print "t2: ")
+         t2 (time (reduce + (map len2 testcoll)))
+         _ (print "t3: ")
+         t3 (time (reduce + (map len3 testcoll)))
+         _ (print "t4: ")
+         t4 (time (reduce + (map len4 testcoll)))
+         _ (print "t5: ")
+         t5 (time (reduce + (map len5 testcoll)))
+         _ (print "t5_mono_vec: ")
+         t5_mono_vec (time (reduce + (map len5 testcoll_vec)))
+         _ (print "t5_mono_str: ")
+         t5_mono_str (time (reduce + (map len5 testcoll_str)))
+         _ (print "vecsize time: ")
+         vecsize_t (time (reduce + (map vecsize testcoll_vec)))
+         _ (print "strlen time: ")
+         strlen_t (time (reduce + (map strlen testcoll_str)))
+         _ (println (.repeat "-" 80))
+         ])
+   (float (/ (* 1000000 (- 590 544) ) (* 15 (/ 64000000 16)) ))
+
+   (len4 "aifuhsrigh")
+   (len4 [3 4 76 8 ])
+
+   (len3 "aifuhsrigh")
+
+   (len5 "aifuhsrigh")
 
   )
 
