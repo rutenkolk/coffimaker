@@ -156,8 +156,7 @@
     :coffi.mem/pointer (list `mem/write-address 'segment offset obj-form)
     (list (symbol (str "serialize-" (name coffitype)))
           obj-form
-          (list `mem/slice 'segment offset (mem/size-of coffitype))
-          'session)))
+          (list `mem/slice 'segment offset (mem/size-of coffitype)))))
 
 (defn gen-serialize-into [typename [_struct fields]]
   (let [protocol-name (symbol (str "proto-serialize-" (name typename)))
@@ -165,26 +164,30 @@
         ]
     (list
      `do
-     (list `defprotocol protocol-name (list protocol-fn ['obj 'segment 'session]))
+     (list `defprotocol protocol-name (list protocol-fn ['obj 'segment]))
      (list `extend-protocol protocol-name
            clojure.lang.IPersistentVector
-           (list protocol-fn ['obj 'segment 'session]
+           (list protocol-fn ['obj 'segment]
                  (->>
                   (partition 2 2 (interleave (reductions + 0 (map (comp mem/size-of second) fields)) fields))
                   (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type))))))
                   (map-indexed
                    (fn [index [offset [_ field-type]]]
-                     (if (and (vector? field-type) (= :coffi.mem/padding (first field-type)))
-                       :no-op
-                                        ;(list `mem/serialize-into (list 'vector-nth 'obj (list `int index)) field-type (list `mem/slice 'segment offset (mem/size-of field-type)))
-                       (gen-serialize-into-single (list 'vector-nth 'obj (list `int index)) field-type offset)))
-                   )
+                     (gen-serialize-into-single
+                      (list 'vector-nth 'obj (list `int index)) field-type offset)))
                   (cons `do))
            clojure.lang.IPersistentMap
-           (list protocol-fn ['obj '_ 'segment 'session] (list `mem/serialize-into 'obj [_struct fields] 'segment 'session))))
+           (->>
+            (partition 2 2 (interleave (reductions + 0 (map (comp mem/size-of second) fields)) fields))
+            (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type))))))
+            (map
+             (fn [[offset [field-name field-type]]]
+               (gen-serialize-into-single
+                (list field-name 'obj) field-type offset)))
+            (cons `do))))
      (list `defmethod `serialize-into typename
-           ['obj '_struct 'segment 'session]
-           (list protocol-fn 'obj 'segment 'session)))))
+           ['obj '_struct 'segment '_session]
+           (list protocol-fn 'obj 'segment)))))
 
 (comment
   (def raylib-header-info
