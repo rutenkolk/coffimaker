@@ -134,29 +134,28 @@
    (:opaque)
    (map (fn [v] (list `mem/defalias (symbol (name (:name v))) :coffi.mem/byte)))))
 
-(defn- gen-structs [types]
-  (->>
-   types
-   (:struct)
-   (map (fn [v] (list
-     `mem/defalias
-     (:name v)
-     (list `layout/with-c-layout [::mem/struct (map typed-decl (:members v))]))))))
-
-
 (defn gen-serialize-into-single [obj-form coffitype offset]
-  (condp = coffitype
-    :coffi.mem/byte    (list `mem/write-byte    'segment offset obj-form)
-    :coffi.mem/short   (list `mem/write-short   'segment offset obj-form)
-    :coffi.mem/int     (list `mem/write-int     'segment offset obj-form)
-    :coffi.mem/long    (list `mem/write-long    'segment offset obj-form)
-    :coffi.mem/char    (list `mem/write-char    'segment offset obj-form)
-    :coffi.mem/float   (list `mem/write-float   'segment offset obj-form)
-    :coffi.mem/double  (list `mem/write-double  'segment offset obj-form)
-    :coffi.mem/pointer (list `mem/write-address 'segment offset obj-form)
-    (list (symbol (str "serialize-" (name coffitype)))
-          obj-form
-          (list `mem/slice 'segment offset (mem/size-of coffitype)))))
+  (if (vector? coffitype)
+    (cond
+      (= :coffi.mem/array (first coffitype))
+      (concat
+       (list `let ['array-obj obj-form])
+       (map
+        (fn [index]
+          (gen-serialize-into-single (list 'vector-nth 'array-obj index) (second coffitype) (+ offset (* (mem/size-of (second coffitype)) index))))
+        (range (second (rest coffitype))))))
+    (condp = coffitype
+      :coffi.mem/byte    (list `mem/write-byte    'segment offset obj-form)
+      :coffi.mem/short   (list `mem/write-short   'segment offset obj-form)
+      :coffi.mem/int     (list `mem/write-int     'segment offset obj-form)
+      :coffi.mem/long    (list `mem/write-long    'segment offset obj-form)
+      :coffi.mem/char    (list `mem/write-char    'segment offset obj-form)
+      :coffi.mem/float   (list `mem/write-float   'segment offset obj-form)
+      :coffi.mem/double  (list `mem/write-double  'segment offset obj-form)
+      :coffi.mem/pointer (list `mem/write-address 'segment offset obj-form)
+      (list (symbol (str "serialize-" (name coffitype)))
+            obj-form
+            (list `mem/slice 'segment offset (mem/size-of coffitype))))))
 
 (defn gen-serialize-into [typename [_struct fields]]
   (let [protocol-name (symbol (str "proto-serialize-" (name typename)))
@@ -166,7 +165,6 @@
                   (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type)))))))
         ]
     (list
-     `do
      (list `defprotocol protocol-name (list protocol-fn ['obj 'segment]))
      (list `extend-protocol protocol-name
            clojure.lang.IPersistentVector
@@ -190,6 +188,18 @@
      (list `defmethod `serialize-into typename
            ['obj '_struct 'segment '_session]
            (list protocol-fn 'obj 'segment)))))
+
+(defn- gen-structs [types]
+  (->>
+   types
+   (:struct)
+   (map (fn [v]
+     (let [struct-layout (layout/with-c-layout [::mem/struct (map typed-decl (:members v))])]
+       (eval (list `mem/defalias (:name v) struct-layout))
+       (list
+        `mem/defalias
+        (:name v)
+        (cons struct-layout (gen-serialize-into (:name v) struct-layout))))))))
 
 (comment
   (def raylib-header-info
