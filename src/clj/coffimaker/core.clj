@@ -109,7 +109,7 @@
 (defn- typename-conversion [t]
   (cond
     (primitive-typename-conversion t) (primitive-typename-conversion t)
-    (keyword? t)                       (keyword (name t))
+    (keyword? t)                       t
     (not (vector? t))                  :t
     (= :pointer (first t))             ::mem/pointer
     (= :array (first t))              [::mem/array (typename-conversion (second t)) (nth t 2)]))
@@ -140,7 +140,7 @@
    (:struct)
    (map (fn [v] (list
      `mem/defalias
-     (keyword (name (:name v)))
+     (:name v)
      (list `layout/with-c-layout [::mem/struct (map typed-decl (:members v))]))))))
 
 
@@ -224,7 +224,7 @@
           [:mipmaps :coffi.mem/short]
           [:format :coffi.mem/float])]))
 
-   (gen-serialize-into :Texture2D
+   (gen-serialize-into ::Texture2D
                        (coffi.layout/with-c-layout
                          [:coffi.mem/struct
                           '([:id :coffi.mem/int]
