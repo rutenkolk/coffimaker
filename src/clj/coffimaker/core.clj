@@ -185,7 +185,7 @@
                      (gen-serialize-into-single
                       (list field-name 'obj) field-type offset)))
                   (cons `do))))
-     (list `defmethod `serialize-into typename
+     (list `defmethod `mem/serialize-into typename
            ['obj '_struct 'segment '_session]
            (list protocol-fn 'obj 'segment)))))
 
@@ -196,10 +196,9 @@
    (map (fn [v]
      (let [struct-layout (layout/with-c-layout [::mem/struct (map typed-decl (:members v))])]
        (eval (list `mem/defalias (:name v) struct-layout))
-       (list
-        `mem/defalias
-        (:name v)
-        (cons struct-layout (gen-serialize-into (:name v) struct-layout))))))))
+       (cons
+        (list `mem/defalias (:name v) struct-layout)
+        (gen-serialize-into (:name v) struct-layout)))))))
 
 (comment
   (def raylib-header-info
