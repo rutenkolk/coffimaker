@@ -71,6 +71,16 @@
 (defmacro defconst [name & decls]
   (list* `def (with-meta name (assoc (meta name) :const true)) decls))
 
+(defmacro do-with-meta [bindings form]
+  (let [bindmap (->>
+                  bindings
+                  (partition 2 2)
+                  (map (fn [[sym metamap]] [sym (with-meta sym metamap)]))
+                  (into (hash-map)))]
+    (clojure.walk/postwalk
+      (fn [x] (get bindmap x x))
+      form)))
+
 (defn vector-nth ^long [v i]
   (.nth ^clojure.lang.IPersistentVector v ^int i))
 
@@ -208,6 +218,16 @@
                                    "RL_CALLOC"  "\n"
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
+
+
+  (do-with-meta [c {:tag short}]
+    (defrecord MyType
+        [^int a
+         ^{:tag double} b
+         c
+         ]))
+
+  (.getType (.getField MyType "c"))
 
   (->>
    raylib-header-info
