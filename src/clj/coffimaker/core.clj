@@ -81,6 +81,16 @@
       (fn [x] (get bindmap x x))
       form)))
 
+(defmacro with-typehint [bindings form]
+  (let [bindmap (->>
+                  bindings
+                  (partition 2 2)
+                  (map (fn [[sym hint]] [sym (with-meta sym {:tag hint})]))
+                  (into (hash-map)))]
+    (clojure.walk/postwalk
+      (fn [x] (get bindmap x x))
+      form)))
+
 (defn vector-nth ^long [v i]
   (.nth ^clojure.lang.IPersistentVector v ^int i))
 
@@ -114,7 +124,26 @@
    :bool           ::mem/byte
    [:pointer :u8]  ::mem/c-string
    :pointer        ::mem/pointer
-   :void-pointer   ::mem/pointer})
+   :void-pointer   ::mem/pointer
+   })
+
+(def- primitive-class-conversion
+  {::mem/float     'float
+   ::mem/double    'double
+   ::mem/char      'char
+   ::mem/byte      'byte
+   ::mem/short     'short
+   ::mem/int       'int
+   ::mem/long      'long
+   ::mem/c-string  java.lang.String
+   ::mem/pointer   'long
+   [:pointer :u8]  java.lang.String
+   }
+  )
+
+(defn coffitype->class [typename]
+  (get primitive-class-conversion typename
+       (symbol (namespace typename) (name typename))))
 
 (defn- typename-conversion [t]
   (cond
@@ -143,6 +172,17 @@
    types
    (:opaque)
    (map (fn [v] (list `mem/defalias (symbol (name (:name v))) :coffi.mem/byte)))))
+
+
+(defn gen-struct-type [typename fields]
+  (let [metabinds (->>
+                   fields
+                   (map (fn [[fieldname coffitype]] [(symbol (name fieldname)) (coffitype->class coffitype)]))
+                   (apply concat)
+                   (vec))]
+    (list 'with-typehint metabinds
+     (list `defrecord (symbol (name typename))
+           (vec (map (comp symbol name first) fields))))))
 
 (defn gen-serialize-into-single [obj-form coffitype offset]
   (if (vector? coffitype)
@@ -199,6 +239,10 @@
            ['obj '_struct 'segment '_session]
            (list protocol-fn 'obj 'segment)))))
 
+(defn- gen-struct-types [typename fields]
+  (list 'do-with-meta (interleave (symbol (name (map first fields))) ) `defrecord)
+  )
+
 (defn- gen-structs [types]
   (->>
    types
@@ -219,8 +263,27 @@
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
 
+  (eval (gen-struct-type :raylib/MyType
+                    [[:id :coffi.mem/int]
+                     [:weird :coffi.mem/byte]
+                     [:weird2 :coffi.mem/double]
+                     [:width :coffi.mem/double]
+                     [:mipmaps :coffi.mem/short]
+                     [:format :coffi.mem/float]]
+
+                    ))
+
+  (.getType (.getField MyType "id"))
+  (.getType (.getField MyType "weird"))
 
   (do-with-meta [c {:tag short}]
+    (defrecord MyType
+        [^int a
+         ^{:tag double} b
+         c
+         ]))
+
+  (with-typehint [c short]
     (defrecord MyType
         [^int a
          ^{:tag double} b
