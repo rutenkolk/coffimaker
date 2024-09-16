@@ -143,7 +143,9 @@
 
 (defn coffitype->class [typename]
   (get primitive-class-conversion typename
-       (symbol (namespace typename) (name typename))))
+       (cond
+         (and (vector? (first typename)) (= ::mem/array (first typename))) 
+         :else (symbol (namespace typename) (name typename)))))
 
 (defn- typename-conversion [t]
   (cond
@@ -177,6 +179,7 @@
 (defn gen-struct-type [typename fields]
   (let [metabinds (->>
                    fields
+                   (filter #(not= ::layout/padding (first %)))
                    (map (fn [[fieldname coffitype]] [(symbol (name fieldname)) (coffitype->class coffitype)]))
                    (apply concat)
                    (vec))]
@@ -251,8 +254,10 @@
      (let [struct-layout (layout/with-c-layout [::mem/struct (map typed-decl (:members v))])]
        (eval (list `mem/defalias (:name v) struct-layout))
        (cons
-        (list `mem/defalias (:name v) struct-layout)
-        (gen-serialize-into (:name v) struct-layout)))))))
+        (gen-struct-type (:name v) (second struct-layout))
+        (cons
+         (list `mem/defalias (:name v) struct-layout)
+         (gen-serialize-into (:name v) struct-layout))))))))
 
 (comment
   (def raylib-header-info
@@ -263,15 +268,22 @@
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
 
+  (coffitype->class :raylib/MyType)
+  (coffitype->class ::mem/int)
+  (Integer/TYPE)
+
   (eval (gen-struct-type :raylib/MyType
                     [[:id :coffi.mem/int]
                      [:weird :coffi.mem/byte]
-                     [:weird2 :coffi.mem/double]
+                     [:weird2 [::mem/array :coffi.mem/double 4]]
                      [:width :coffi.mem/double]
                      [:mipmaps :coffi.mem/short]
                      [:format :coffi.mem/float]]
 
-                    ))
+                    )
+
+
+        )
 
   (.getType (.getField MyType "id"))
   (.getType (.getField MyType "weird"))
