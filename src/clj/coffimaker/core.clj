@@ -399,10 +399,42 @@
                    (filter #(not= ::layout/padding (first %)))
                    (map (fn [[fieldname coffitype]] [(symbol (name fieldname)) (coffitype->class coffitype)]))
                    (apply concat)
-                   (vec))]
+                   (vec))
+        as-vec (vec (partition 2 (interleave (map (comp symbol (partial str ".") name first) fields) (repeat 'this) )))
+        as-map (into {} (map (fn [f] [(first f) (list (->> f (first) (name) (str ".") (symbol)) 'this)]) fields))
+        ]
     (list 'with-typehint metabinds
-     (list `defrecord (symbol (name typename))
-           (vec (map (comp symbol name first) fields))))))
+     (list `deftype (symbol (name typename))
+           (vec (map (comp symbol name first) fields))
+     clojure.lang.IPersistentVector
+     clojure.lang.IPersistentMap
+     (list 'length      ['this]           (count fields))
+     (list 'assocN      ['this 'i 'value] (list `assoc 'i as-vec 'value))
+     (list 'cons        ['this 'o]        (vec (cons 'o as-vec)))
+     (list 'peek        ['this]           (first as-vec))
+     (list 'pop         ['this]           (vec (rest as-vec)))
+     (list 'count       ['this]           (count fields))
+     (list 'empty       ['this]           [])
+     (list 'equiv       ['this 'o]        (list `or (list `=  as-vec 'o) (list `= as-map 'o)))
+     (list 'seq         ['this]           (list `seq as-vec))
+     (list 'rseq        ['this]           (vec (reverse as-vec)))
+     (list 'nth         ['this 'i]        (concat [`case 'i] (interleave (range) as-vec)))
+     (list 'nth         ['this 'i 'o]     (concat [`case 'i] (interleave (range) as-vec) ['o]))
+
+     (list 'assoc       ['this 'i 'value] (list `if (list `number? 'i) (list `assoc as-vec 'i 'value) (assoc as-map 'i 'value)))
+     (list 'assocEx     ['this 'i 'value] (list `if (list (set (map first fields)) 'i) (list `throw (list `Exception. "key already exists")) (assoc as-map 'i 'value)))
+     (list 'without     ['this 'k]        (list `if (list `number? 'k) (list `let ['as-vec as-vec] (list `vec (list `concat (list `subvec 'as-vec 0 'k) (list `subvec 'as-vec (list `inc 'k) (count fields))))) (list `dissoc as-map 'k)))
+     (list 'containsKey ['this 'k]    (list `if (list `number? 'k) (list `and (list `>= 'k 0) (list `< 'k (count fields))) (list (set (map first fields)) 'k)))
+     (list 'entryAt     ['this 'k]    (list `clojure.lang.MapEntry/create 'k (concat [`case 'k] (interleave (range) as-vec) (interleave (map first fields) as-vec))))
+
+     (list 'valAt       ['this 'k]    (concat [`case 'k] (interleave (range) as-vec) (interleave (map first fields) as-vec)))
+     (list 'valAt       ['this 'k 'o] (concat [`case 'k] (interleave (range) as-vec) (interleave (map first fields) as-vec) ['o]))
+     (list 'iterator    ['this]       (list '.iterator as-map))
+     (concat ['forEach  ['this 'action]]  (partition 2 (interleave (repeat 'action) as-vec)))
+     )
+
+     )))
+
 
 (defn gen-serialize-into-single [obj-form coffitype offset]
   (if (vector? coffitype)
@@ -470,6 +502,9 @@
            ['obj '_struct 'segment '_session]
            (list protocol-fn 'obj 'segment)))))
 
+(defn gen-deserialize-from [typename [_struct fields]]
+  (let [protocol-name (symbol (str "proto-deserialize-" (name typename)))])
+  )
 
 (defn- gen-struct-types [typename fields]
   (list 'do-with-meta (interleave (symbol (name (map first fields))) ) `defrecord)
@@ -571,6 +606,80 @@
                             [:format :coffi.mem/float])])
                        )
 
+(with-typehint
+   [x float y float]
+   (clojure.core/deftype
+    Vector2
+    [x y]
+    clojure.lang.IPersistentVector
+    clojure.lang.IPersistentMap
+    (length [this] 2)
+    (assocN [this i value] (clojure.core/assoc i [(.x this) (.y this)] value))
+    (cons [this o] [o (.x this) (.y this)])
+    (peek [this] (.x this))
+    (pop [this] [(.y this)])
+    (count [this] 2)
+    (empty [this] [])
+    (equiv
+     [this o]
+     (clojure.core/or
+      (clojure.core/= [(.x this) (.y this)] o)
+      (clojure.core/= {:x (.x this), :y (.y this)} o)))
+    (seq [this] (clojure.core/seq [(.x this) (.y this)]))
+    (rseq [this] [(.y this) (.x this)])
+    (nth [this i] (clojure.core/case i 0 (.x this) 1 (.y this)))
+    (nth [this i o] (clojure.core/case i 0 (.x this) 1 (.y this) o))
+    (assoc
+     [this i value]
+     (if
+      (clojure.core/number? i)
+      (clojure.core/assoc [(.x this) (.y this)] i value)
+      {:x (.x this), :y (.y this), i value}))
+    (assocEx
+     [this i value]
+     (if
+      (#{:y :x} i)
+      (throw (java.lang.Exception. "key already exists"))
+      {:x (.x this), :y (.y this), i value}))
+    (without
+     [this k]
+     (if
+      (clojure.core/number? k)
+      (clojure.core/let
+       [as-vec [(.x this) (.y this)]]
+       (clojure.core/vec
+        (clojure.core/concat
+         (clojure.core/subvec as-vec 0 k)
+         (clojure.core/subvec as-vec (clojure.core/inc k) 2))))
+      (clojure.core/dissoc {:x (.x this), :y (.y this)} k)))
+    (containsKey
+     [this k]
+     (if
+      (clojure.core/number? k)
+      (clojure.core/and (clojure.core/>= k 0) (clojure.core/< k 2))
+      (#{:y :x} k)))
+    (entryAt
+     [this k]
+     (clojure.lang.MapEntry/create
+      k
+      (clojure.core/case k 0 (.x this) 1 (.y this) :x (.x this) :y (.y this))))
+    (valAt
+     [this k]
+     (clojure.core/case k 0 (.x this) 1 (.y this) :x (.x this) :y (.y this)))
+    (valAt
+     [this k o]
+     (clojure.core/case k 0 (.x this) 1 (.y this) :x (.x this) :y (.y this) o))
+    (iterator [this] (.iterator {:x (.x this), :y (.y this)}))
+    (forEach [this action] (action (.x this)) (action (.y this)))))
+
+
+   (cons :test (Vector2. 1.0 2.0))
+   (map #(+ 2 %) (Vector2. 1.0 2.0))
+
+   (Vector2. 1.0 2.0)
+
+   (defmethod clojure.pprint/simple-dispatch Vector2 [obj] (clojure.pprint/simple-dispatch (into {} obj)))
+
    (defn len [x]
      (if (vector? x)
        (.size x)
@@ -600,7 +709,6 @@
      (.size ^clojure.lang.IPersistentVector x))
    (defn strlen [x]
      (.length ^java.lang.String x))
-
 
    (let [testvec [57 856 25  856 25 "hallo" "test" 0.4 1.9 2]
          teststring "ergdrgnsdng"
