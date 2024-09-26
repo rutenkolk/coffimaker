@@ -454,10 +454,22 @@
                    (fn [[offset [field-name field-type]]]
                      (gen-serialize-into-single
                       (list field-name 'obj) field-type offset)))
-                  (cons `do))))
+                  (cons `do)))
+           (symbol (name typename))
+           (list protocol-fn ['obj 'segment]
+                 (->>
+                  typelist
+                  (map
+                   (fn [[offset [field-name field-type]]]
+                     (gen-serialize-into-single
+                      (list (symbol (str "." (name field-name))) 'obj) field-type offset)))
+                  (cons `do)))
+
+           )
      (list `defmethod `mem/serialize-into typename
            ['obj '_struct 'segment '_session]
            (list protocol-fn 'obj 'segment)))))
+
 
 (defn- gen-struct-types [typename fields]
   (list 'do-with-meta (interleave (symbol (name (map first fields))) ) `defrecord)
