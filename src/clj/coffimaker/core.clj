@@ -423,7 +423,7 @@
 
      (list 'assoc       ['this 'i 'value] (list `if (list `number? 'i) (list `assoc as-vec 'i 'value) (assoc as-map 'i 'value)))
      (list 'assocEx     ['this 'i 'value] (list `if (list (set (map first fields)) 'i) (list `throw (list `Exception. "key already exists")) (assoc as-map 'i 'value)))
-     (list 'without     ['this 'k]        (list `if (list `number? 'k) (list `let ['as-vec as-vec] (list `vec (list `concat (list `subvec 'as-vec 0 'k) (list `subvec 'as-vec (list `inc 'k) (count fields))))) (list `dissoc as-map 'k)))
+     (list 'without     ['this 'k]        (list `dissoc as-map (list `if (list `number? 'k) (list (vec (map first fields)) 'k) 'k)))
      (list 'containsKey ['this 'k]    (list `if (list `number? 'k) (list `and (list `>= 'k 0) (list `< 'k (count fields))) (list (set (map first fields)) 'k)))
      (list 'entryAt     ['this 'k]    (list `clojure.lang.MapEntry/create 'k (concat [`case 'k] (interleave (range) as-vec) (interleave (map first fields) as-vec))))
 
@@ -458,6 +458,7 @@
       (list (symbol (str "serialize-" (name coffitype)))
             obj-form
             (list `mem/slice 'segment offset (mem/size-of coffitype))))))
+
 
 (defn gen-serialize-into [typename [_struct fields]]
   (let [protocol-name (symbol (str "proto-serialize-" (name typename)))
@@ -645,12 +646,9 @@
      [this k]
      (if
       (clojure.core/number? k)
-      (clojure.core/let
-       [as-vec [(.x this) (.y this)]]
-       (clojure.core/vec
-        (clojure.core/concat
-         (clojure.core/subvec as-vec 0 k)
-         (clojure.core/subvec as-vec (clojure.core/inc k) 2))))
+      (clojure.core/dissoc
+       {:x (.x this), :y (.y this)}
+       ([(.x this) (.y this)] k))
       (clojure.core/dissoc {:x (.x this), :y (.y this)} k)))
     (containsKey
      [this k]
@@ -674,7 +672,12 @@
 
 
    (cons :test (Vector2. 1.0 2.0))
+
    (map #(+ 2 %) (Vector2. 1.0 2.0))
+
+   (assoc (Vector2. 1.0 2.0) :thats :nice)
+
+   (dissoc (Vector2. 1.0 2.0) 0)
 
    (Vector2. 1.0 2.0)
 
