@@ -505,6 +505,7 @@
 
 (defn gen-deserialize-from [typename [_struct fields]]
   (let [protocol-name (symbol (str "proto-deserialize-" (name typename)))])
+  `(defmethod mem/deserialize-from typename ~['segment '_type] :TODO)
   )
 
 (defn- gen-struct-types [typename fields]
@@ -521,8 +522,13 @@
        (concat
         [(gen-struct-type (:name v) (second struct-layout))
          (list `defmethod `clojure.pprint/simple-dispatch 'Vector2 ['obj] (list `clojure.pprint/simple-dispatch (list `into {} 'obj)))
-         (list `mem/defalias (:name v) struct-layout)]
-        (gen-serialize-into (:name v) struct-layout)))))
+         (list `mem/defalias (:name v) struct-layout)
+         `(defmethod mem/c-layout ~(:name v) [~'_type] ~struct-layout)
+
+         ]
+        (gen-serialize-into (:name v) struct-layout)
+        (gen-deserialize-from (:name v) struct-layout)
+        ))))
    (reduce concat)
    ))
 
