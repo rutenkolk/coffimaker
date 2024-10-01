@@ -503,9 +503,60 @@
            ~['obj '_struct 'segment '_session]
            (~protocol-fn ~'obj ~'segment)))))
 
+(defn coffitype-to-array-fn [_type]
+  (get
+   {:coffi.mem/byte   `byte-array
+    :coffi.mem/short  `short-array
+    :coffi.mem/int    `int-array
+    :coffi.mem/long   `long-array
+    :coffi.mem/char   `char-array
+    :coffi.mem/float  `float-array
+    :coffi.mem/double `double-array}
+   _type
+   `object-array))
+
+(defmulti gen-deserialize-from-single (fn [& xs] (if (vector? (first xs)) (first (first xs)) (first xs))))
+
+(defmethod gen-deserialize-from-single :coffi.mem/byte     [_type offset] [`(mem/read-byte    ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/short    [_type offset] [`(mem/read-short   ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/int      [_type offset] [`(mem/read-int     ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/long     [_type offset] [`(mem/read-long    ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/char     [_type offset] [`(mem/read-char    ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/float    [_type offset] [`(mem/read-float   ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/double   [_type offset] [`(mem/read-double  ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/pointer  [_type offset] [`(mem/read-address ~'segment ~offset)])
+(defmethod gen-deserialize-from-single :coffi.mem/c-string [_type offset] [`(list 'with-typehint ['addr java.lang.foreign.MemorySegment] (list `.getString (list `.reinterpret 'addr `Integer/MAX_VALUE) 0))])
+(defmethod gen-deserialize-from-single :coffi.mem/array    [_type offset]
+  (let [outer-code `(let [arr# (~(coffitype-to-array-fn (second _type)) ~(second (rest _type)))] arr# )
+        gen-arr (nth outer-code 2)
+        ]
+    [(concat (butlast outer-code)
+             [`aset gen-arr]
+             (reduce concat (map (fn [index] (let [deserialize-instructions
+                                     (gen-deserialize-from-single (second _type) (+ offset (* (mem/size-of (second _type)) index)))]
+                                               (if (vector? deserialize-instructions)
+                                                 (list index (first deserialize-instructions))
+                                                 (list index deserialize-instructions))))
+                   (range (second (rest _type)))))
+             [gen-arr]
+             )]))
+
 (defn gen-deserialize-from [typename [_struct fields]]
-  (let [protocol-name (symbol (str "proto-deserialize-" (name typename)))])
-  `(defmethod mem/deserialize-from typename ~['segment '_type] :TODO)
+  (let [typelist (->>
+                  (partition 2 2 (interleave (reductions + 0 (map (comp mem/size-of second) fields)) fields))
+                  (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type)))))))]
+    (defmethod gen-deserialize-from-single typename [_type global-offset]
+      (->> typelist
+           (map-indexed
+            (fn [index [offset [_ field-type]]]
+              (gen-deserialize-from-single field-type (+ global-offset offset))))
+           (reduce concat)
+           (cons (symbol (str (name typename) ".")))
+           )
+
+      ))
+  [`(defmethod mem/deserialize-from ~typename ~['segment '_type]
+      ~(cons (symbol (str (name typename) ".")) (gen-deserialize-from-single typename 0)))]
   )
 
 (defn- gen-struct-types [typename fields]
