@@ -468,7 +468,7 @@
                   (filter (fn [[_ [_ field-type]]] (not (and (vector? field-type) (= :coffi.mem/padding (first field-type)))))))
         ]
     (list
-     (list `defprotocol protocol-name (list protocol-fn ['obj 'segment]))
+     `(defprotocol ~protocol-name (~protocol-fn ~['obj 'segment]))
      (list `extend-protocol protocol-name
            clojure.lang.IPersistentVector
            (list protocol-fn ['obj 'segment]
@@ -499,9 +499,9 @@
                   (cons `do)))
 
            )
-     (list `defmethod `mem/serialize-into typename
-           ['obj '_struct 'segment '_session]
-           (list protocol-fn 'obj 'segment)))))
+     `(defmethod mem/serialize-into ~typename
+           ~['obj '_struct 'segment '_session]
+           (~protocol-fn ~'obj ~'segment)))))
 
 (defn gen-deserialize-from [typename [_struct fields]]
   (let [protocol-name (symbol (str "proto-deserialize-" (name typename)))])
