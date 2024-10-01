@@ -518,11 +518,11 @@
    (map (fn [v]
      (let [struct-layout (layout/with-c-layout [::mem/struct (map typed-decl (:members v))])]
        (eval (list `mem/defalias (:name v) struct-layout))
-       (cons
-        (gen-struct-type (:name v) (second struct-layout))
-        (cons
-         (list `mem/defalias (:name v) struct-layout)
-         (gen-serialize-into (:name v) struct-layout))))))))
+       (concat
+        [(gen-struct-type (:name v) (second struct-layout))
+         (list `defmethod `clojure.pprint/simple-dispatch 'Vector2 ['obj] (list `clojure.pprint/simple-dispatch (list `into {} 'obj)))
+         (list `mem/defalias (:name v) struct-layout)]
+        (gen-serialize-into (:name v) struct-layout)))))))
 
 
 (comment
@@ -644,12 +644,9 @@
       {:x (.x this), :y (.y this), i value}))
     (without
      [this k]
-     (if
-      (clojure.core/number? k)
-      (clojure.core/dissoc
-       {:x (.x this), :y (.y this)}
-       ([(.x this) (.y this)] k))
-      (clojure.core/dissoc {:x (.x this), :y (.y this)} k)))
+     (clojure.core/dissoc
+      {:x (.x this), :y (.y this)}
+      (if (clojure.core/number? k) ([:x :y] k) k)))
     (containsKey
      [this k]
      (if
@@ -671,15 +668,11 @@
     (forEach [this action] (action (.x this)) (action (.y this)))))
 
 
-   (cons :test (Vector2. 1.0 2.0))
-
-   (map #(+ 2 %) (Vector2. 1.0 2.0))
-
-   (assoc (Vector2. 1.0 2.0) :thats :nice)
-
-   (dissoc (Vector2. 1.0 2.0) 0)
-
-   (Vector2. 1.0 2.0)
+(cons :test (Vector2. 1.0 2.0)) => (:test 1.0 2.0)
+(map #(+ 2 %) (Vector2. 1.0 2.0)) => (3.0 4.0)
+(assoc (Vector2. 1.0 2.0) :thats :nice) => {:x 1.0, :y 2.0, :thats :nice}
+(dissoc (Vector2. 1.0 2.0) :x) => {:y 2.0}
+(dissoc (Vector2. 1.0 2.0) 0) => {:y 2.0}
 
    (defmethod clojure.pprint/simple-dispatch Vector2 [obj] (clojure.pprint/simple-dispatch (into {} obj)))
 
