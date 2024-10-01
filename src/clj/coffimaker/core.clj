@@ -522,7 +522,9 @@
         [(gen-struct-type (:name v) (second struct-layout))
          (list `defmethod `clojure.pprint/simple-dispatch 'Vector2 ['obj] (list `clojure.pprint/simple-dispatch (list `into {} 'obj)))
          (list `mem/defalias (:name v) struct-layout)]
-        (gen-serialize-into (:name v) struct-layout)))))))
+        (gen-serialize-into (:name v) struct-layout)))))
+   (reduce concat)
+   ))
 
 
 (comment
