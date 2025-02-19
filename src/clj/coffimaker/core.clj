@@ -122,7 +122,8 @@
 
 
 (def- primitive-typename-conversion
-  {:f32            ::mem/float
+  {:f64            ::mem/double
+   :f32            ::mem/float
    :uchar          ::mem/char
    :i8             ::mem/byte
    :i16            ::mem/short
@@ -174,7 +175,7 @@
     (primitive-typename-conversion t) (primitive-typename-conversion t)
     (keyword? t)                       t
     (not (vector? t))                  :t
-    (= :pointer (first t))             ::mem/pointer
+    (= :pointer (first t))             [::mem/pointer (typename-conversion (second t))]
     (= :array (first t))              [::mem/array (typename-conversion (second t)) (nth t 2)]
     (= :function-pointer (first t))    :idk-something-something-fn-pointer ; TODO
     ))
@@ -201,6 +202,9 @@
    _type
    `object-array))
 
+(defn- memberlist-typename-conversion [l]
+  (vec (reduce concat (map (fn [[type name]] [(typename-conversion type) (symbol (clojure.core/name name))]) l))))
+
 (defn gen-struct [{:keys [name members] :as v}]
   `(mem/defstruct ~name ~(vec (reduce concat (map (fn [[type name]] [(typename-conversion type) (symbol (clojure.core/name name))]) members)))))
 
@@ -216,6 +220,36 @@
      :struct gen-struct
      :alias gen-alias
      :opaque gen-opaque) v))
+
+(defn- argtype-to-str [v]
+  (cond
+    (keyword? v) (cond
+                   (= v :void) "()"
+                   (= (namespace v) "coffi.mem") (str "`" (name v) "`")
+                   :else (str "`" (subs (str v) 1) "`"))
+    (vector? v) (let [[fst snd trd & r] v]
+                  (case (keyword (name fst))
+                    :pointer (str "*" (argtype-to-str snd))
+                    :array (str (argtype-to-str snd) "[" trd "]")
+                    (str "[" (s/join (map argtype-to-str v)) "]")))))
+
+(defn gen-fn [{:keys [name params return-type]}]
+  (let [docstr (str
+                (if (= params []) "()")
+                (->> params
+                     (map first)
+                     (map typename-conversion)
+                     (map argtype-to-str)
+                     (s/join " "))
+                " -> "
+                (argtype-to-str return-type))]
+    `(ffi/defcfn
+       ~(symbol (clojure.core/name name))
+       ~docstr
+       {:arglists '~(list (vec (map (comp symbol #(subs % 1) str second) params)))}
+       ~(symbol (clojure.core/name name))
+       ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
+       ~(let [v (typename-conversion return-type)] (if (= v :void) :coffi.mem/void v)))))
 
 (comment
   (def raylib-header-info
@@ -237,6 +271,7 @@
    raylib-header-info
    (group-by :type)
    (:fn)
+   (map gen-fn)
    )
 
 
