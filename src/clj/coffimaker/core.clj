@@ -39,9 +39,50 @@
     ValueLayout$OfChar
     ValueLayout$OfFloat
     ValueLayout$OfDouble)
-   (java.nio ByteOrder)
-   )
-  )
+   (java.nio ByteOrder)))
+
+(defn doall-with-coffi-ns [ns-name forms]
+  (do
+    (create-ns ns-name)
+     (binding [*ns* (the-ns ns-name)]
+       (eval
+        `(do
+           (use '[~'clojure.core])
+           (require
+            '[~'clojure.java.io :as ~'io]
+            '[~'clojure.string :as ~'s]
+            '[~'clojure.pprint :as ~'pprint]
+            '[~'clojure.edn :as ~'edn]
+            '[~'coffi.ffi :as ~'ffi]
+            '[~'coffi.mem :as ~'mem]
+            '[~'coffi.layout :as ~'layout])
+           (import
+            '(~'clojure.lang
+              ~'IDeref ~'IFn ~'IMeta ~'IObj ~'IReference)
+            '(~'java.lang.invoke
+              ~'MethodHandle
+              ~'MethodHandles
+              ~'MethodType)
+            '(~'java.lang.foreign
+              ~'Linker
+              ~'Linker$Option
+              ~'FunctionDescriptor
+              ~'AddressLayout
+              ~'Arena
+              ~'MemoryLayout
+              ~'MemorySegment
+              ~'MemorySegment$Scope
+              ~'SegmentAllocator
+              ~'ValueLayout
+              ~'ValueLayout$OfByte
+              ~'ValueLayout$OfShort
+              ~'ValueLayout$OfInt
+              ~'ValueLayout$OfLong
+              ~'ValueLayout$OfChar
+              ~'ValueLayout$OfFloat
+              ~'ValueLayout$OfDouble)
+            '(~'java.nio ~'ByteOrder))))
+       (eval (cons `do forms)))))
 
 (defn- copy-resource-to
   "copies a resource file to a target directory, keeping it's name.
@@ -80,9 +121,6 @@
 (defmacro def- [name & decls]
   (list* `def (with-meta name (assoc (meta name) :private true)) decls))
 
-(defmacro defconst [name & decls]
-  (list* `def (with-meta name (assoc (meta name) :const true)) decls))
-
 (defmacro do-with-meta [bindings form]
   (let [bindmap (->>
                   bindings
@@ -117,7 +155,7 @@
 (defn- u8      [name] [name ::mem/byte])
 (defn- u16     [name] [name ::mem/short])
 (defn- u32     [name] [name ::mem/int])
-(defn- bool    [name] [name ::mem/byte])
+(defn- bool    [name] [name ::mem/boolean])
 (defn- pointer [name] [name ::mem/pointer])
 
 
@@ -134,7 +172,7 @@
    :u8             ::mem/byte
    :u16            ::mem/short
    :u32            ::mem/int
-   :bool           ::mem/byte
+   :bool           ::mem/boolean
    [:pointer :u8]  ::mem/c-string
    :pointer        ::mem/pointer
    :void-pointer   ::mem/pointer
@@ -183,9 +221,11 @@
 (defn gen-constant [{:keys [name value kind]}]
   (cond
     (#{:true :false} name) nil
-    (qualified-keyword? kind) `(defconst ~(symbol (clojure.core/name name)) (~(symbol (s/join (rest (str kind ".")))) ~@value))
-    (= kind :bool) `(defconst ~(symbol (clojure.core/name name)) ~(case value 0 false 1 true value))
-    :else `(defconst ~(symbol (clojure.core/name name)) ~value)))
+    (qualified-keyword? kind)
+    `(def ~(symbol (clojure.core/name name))
+       (~(symbol (str (clojure.core/name kind) ".") ) ~@value))
+    (= kind :bool) `(def ~(vary-meta (symbol (clojure.core/name name)) assoc :const true) ~(case value 0 false 1 true value))
+    :else `(def ~(vary-meta (symbol (clojure.core/name name)) assoc :const true) ~value)))
 
 (defn coffitype-to-array-fn [_type]
   (get
@@ -203,7 +243,7 @@
   (vec (reduce concat (map (fn [[type name]] [(typename-conversion type) (symbol (clojure.core/name name))]) l))))
 
 (defn gen-struct [{:keys [name members] :as v}]
-  `(mem/defstruct ~name ~(vec (reduce concat (map (fn [[type name]] [(typename-conversion type) (symbol (clojure.core/name name))]) members)))))
+  `(mem/defstruct ~(symbol (clojure.core/name name)) ~(vec (reduce concat (map (fn [[type name]] [(symbol (clojure.core/name name)) (typename-conversion type)]) members)))))
 
 (defn gen-alias [{:keys [name alias-of] :as v}]
   `(mem/defalias ~name ~(typename-conversion alias-of))
@@ -250,6 +290,16 @@
        ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
        ~(typename-conversion return-type))))
 
+(defn generate-from-header-info [header-info]
+  (->>
+   header-info
+   (map #(case (:type %)
+           :type     (gen-type %)
+           :constant (gen-constant %)
+           :fn       (gen-fn %)))
+   (filter identity)
+   (doall)))
+
 (comment
   (def raylib-header-info
     (c-header-info
@@ -259,21 +309,33 @@
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
 
-  (->>
-   raylib-header-info
-   (group-by :type)
-   (:type)
-   (map gen-type)
-   )
+  (set! *print-meta* true)
+
+  (ffi/load-library "raylib.dll")
 
   (->>
    raylib-header-info
-   (group-by :type)
-   (:fn)
-   (map gen-fn)
-   )
+   (generate-from-header-info)
+   (doall-with-coffi-ns 'raylib))
 
-
+  (do
+    (raylib/InitWindow 800 450 "raylib-clj [core] example - basic window")
+    (raylib/SetTargetFPS 10000)
+    (while (not (raylib/WindowShouldClose))
+      (let [[last-time acc] @state
+            newtime (System/nanoTime)
+            diff (- newtime last-time)
+            newacc (vec (take-last 500 (conj acc diff)))
+            average-diff (/ (reduce + newacc) (count newacc))
+            average-fps (long (/ 1000000000 average-diff))]
+        (reset! state [newtime newacc])
+        (raylib/BeginDrawing)
+        (raylib/ClearBackground raylib/RAYWHITE)
+        (raylib/DrawText "Congrats! You created your first raylib window!" 190 200 20 raylib/BLACK)
+        (raylib/DrawText "And you did it from clojure!" (int (+ 190 (rand 5))) 240 20 raylib/DARKBLUE)
+        (raylib/DrawText (str "fps: " average-fps ) 190 380 20 raylib/BLACK)
+        (raylib/EndDrawing)))
+    (raylib/CloseWindow))
 
   )
 
