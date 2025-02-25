@@ -1,7 +1,7 @@
 const std = @import("std");
 const print = std.debug.print;
 const os = std.os;
-const c = @import("raylib.zig");
+const c = @import("<<__ZIGCLJ_TRANSLATED_HEADER__>>");
 
 pub fn print_native_type_conversion(T: type) void {
     std.debug.print(" \"{s}\" \"{s}\"", .{
