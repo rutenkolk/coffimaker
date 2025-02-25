@@ -107,16 +107,16 @@
         tmp (rfs/temp-dir "coffimaker")
         _ (copy-resource-to "coffimaker.zig" tmp {"<<__ZIGCLJ_TRANSLATED_HEADER__>>" (str header-name ".zig")})
         build-file (copy-resource-to "build.zig" tmp)
-        translated-file (rfs/file tmp (str header-name ".zig"))]
-    (spit
-     translated-file
-     (-> header
-         (z/translate-c-header! opts)
-         (z/post-process-header-translation)))
-    (->
-     (with-sh-dir (str tmp) (z/zig :build :run))
-     (:err)
-     (edn/read-string))))
+        translated-file (rfs/file tmp (str header-name ".zig"))
+        translate-result (z/translate-c-header! header opts)
+        ]
+    (if (not (string? translate-result))
+      translate-result
+      (let [_ (spit translated-file (z/post-process-header-translation translate-result))
+            build-output (with-sh-dir (str tmp) (z/zig :build :run))]
+        (if (= 0 (:exit build-output))
+          (edn/read-string (:err build-output))
+          build-output)))))
 
 (defmacro def- [name & decls]
   (list* `def (with-meta name (assoc (meta name) :private true)) decls))
