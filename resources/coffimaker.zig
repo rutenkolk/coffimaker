@@ -75,7 +75,11 @@ fn print_module_decls(T: type) void {
                         std.debug.print(" :kind {s}\n :internal_reference :{s}\n :members [", .{ kind_str, internal_reference(@Type(type_info)) });
                         inline for (container_info.fields) |field| {
                             std.debug.print(" [", .{});
-                            print_custom_typename(field.type);
+                            switch (type_info) {
+                                else => unreachable,
+                                .Enum => {}, //TODO: field.type doesn't exist for enum fields
+                                inline .Struct, .Union => print_custom_typename(field.type),
+                            }
                             std.debug.print(" :{s}]", .{field.name});
                         }
                         std.debug.print(" ]}}\n", .{});
