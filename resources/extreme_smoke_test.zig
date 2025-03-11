@@ -9,8 +9,14 @@ pub fn genericArgRet(v: anytype) @TypeOf(v) {}
 pub const __zigclj_fn_param_names_genericArg = .{"_"};
 pub fn genericArg(_: anytype) void {}
 
-pub const __zigclj_fn_param_names_knownVoid = .{ "v", "w" };
-pub fn knownVoid(v: void, w: @TypeOf(v)) @TypeOf(w) {}
+pub const __zigclj_fn_param_names_knownVoid = .{ "_", "_" };
+//old zig (before https://github.com/ziglang/zig/pull/22547): The `@TypeOf` here are resolved to void.
+//pub fn knownVoid(v: void, w: @TypeOf(v)) @TypeOf(w) {}
+//new zig: arguments and results with @TypeOf are treated as generic.
+pub fn knownVoid(_: void, _: void) void {}
+
+pub const __zigclj_fn_param_names_genericRet = .{"v"};
+pub fn genericRet(v: void) @TypeOf(v) {}
 
 pub const EmptyStruct = extern struct {};
 pub const EmptyEnum = enum {};
@@ -30,8 +36,12 @@ pub extern const extern_u8_const: u8;
 pub extern var extern_i8_var: i8;
 
 comptime {
-    @export(some_u8_value, .{ .name = "extern_u8_const" });
-    @export(some_i8_var, .{ .name = "extern_i8_var" });
+    // old zig (before ziglang/zig/pull/21206): @export takes lvalue expression
+    //@export(some_u8_value, .{ .name = "extern_u8_const" });
+    //@export(some_i8_var, .{ .name = "extern_i8_var" });
+    // new zig: @export takes pointer
+    @export(&some_u8_value, .{ .name = "extern_u8_const" });
+    @export(&some_i8_var, .{ .name = "extern_i8_var" });
 }
 
 pub const empty_struct = EmptyStruct{};
