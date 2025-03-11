@@ -2,6 +2,7 @@ const std = @import("std");
 const print = std.debug.print;
 const os = std.os;
 const c = @import("<<__ZIGCLJ_TRANSLATED_HEADER__>>");
+const extreme_smoke_test = @import("./extreme_smoke_test.zig");
 
 pub fn print_native_type_conversion(T: type) void {
     std.debug.print(" \"{s}\" \"{s}\"", .{
@@ -32,16 +33,17 @@ pub fn main() void {
     //std.time.sleep(1000000000);
     std.debug.print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n", .{});
     //print_all_native_type_conversions();
+    const run_extreme_smoke_test = false; //TODO: hook into build setup
 
     std.debug.print("[\n", .{});
-    print_module_decls(c);
+    print_module_decls(if (run_extreme_smoke_test) extreme_smoke_test else c);
     std.debug.print("\n]\n", .{});
 }
 
 fn print_module_decls(T: type) void {
     inline for (allDecls(T)) |decl| {
         switch (decl.info) {
-            .Fn => |info| {
+            .@"fn" => |info| {
                 switch (std.mem.eql(u8, decl.name, "CLITERAL")) {
                     inline false => {
                         std.debug.print("{{:type :fn\n :name :{s}\n :params [", .{decl.name});
@@ -58,27 +60,31 @@ fn print_module_decls(T: type) void {
                     inline true => {},
                 }
             },
-            .Type => |_| {
+            .type => |_| {
                 const type_info = @typeInfo(@field(T, decl.name));
                 std.debug.print("{{:type :type\n :name :{s}\n", .{namespaced_declname(T, decl)});
                 switch (type_info) {
-                    inline .Struct, .Enum, .Union => |container_info| {
+                    inline .@"struct", .@"enum", .@"union" => |container_info| {
                         const kind_str = switch (type_info) {
-                            inline .Struct => ":struct",
-                            inline .Enum => ":enum",
-                            inline .Union => ":union",
+                            inline .@"struct" => ":struct",
+                            inline .@"enum" => ":enum",
+                            inline .@"union" => ":union",
                             else => unreachable,
                         };
 
                         std.debug.print(" :kind {s}\n :internal_reference :{s}\n :members [", .{ kind_str, internal_reference(@Type(type_info)) });
                         inline for (container_info.fields) |field| {
                             std.debug.print(" [", .{});
-                            print_custom_typename(field.type);
+                            switch (type_info) {
+                                else => unreachable,
+                                .@"enum" => {}, //TODO: field.type doesn't exist for enum fields
+                                inline .@"struct", .@"union" => print_custom_typename(field.type),
+                            }
                             std.debug.print(" :{s}]", .{field.name});
                         }
                         std.debug.print(" ]}}\n", .{});
                     },
-                    inline .Opaque => {
+                    inline .@"opaque" => {
                         std.debug.print(" :kind :opaque}}\n", .{});
                     },
                     inline else => {
@@ -103,7 +109,7 @@ fn print_module_decls(T: type) void {
 }
 
 fn internal_reference(x: anytype) []const u8 {
-    const prefix_len = "coffimaker.print_module_decls__anon_xxxx__".len;
+    const prefix_len = "coffimaker.print_module_decls__anon_xxxxx__".len;
     return switch (@TypeOf(x)) {
         inline type => @typeName(@Type(@typeInfo(x)))[prefix_len..],
         inline std.builtin.Type => @typeName(@Type(x))[prefix_len..],
@@ -114,7 +120,7 @@ fn internal_reference(x: anytype) []const u8 {
 fn print_value(runtime_value: anytype) void {
     const T = @TypeOf(runtime_value);
     switch (@typeInfo(T)) {
-        .Struct => |info| {
+        .@"struct" => |info| {
             std.debug.print("[", .{});
             inline for (info.fields) |field| {
                 std.debug.print(" ", .{});
@@ -122,7 +128,7 @@ fn print_value(runtime_value: anytype) void {
             }
             std.debug.print(" ]", .{});
         },
-        .Array => {
+        .array => {
             //const array_value: []info.child = runtime_value;
             std.debug.print("[", .{});
             inline for (runtime_value) |element| {
@@ -131,17 +137,17 @@ fn print_value(runtime_value: anytype) void {
             }
             std.debug.print(" ]", .{});
         },
-        .Float, .Int => {
+        .float, .int => {
             std.debug.print("{d}", .{runtime_value});
         },
-        .Pointer => |info| {
+        .pointer => |info| {
             if (@intFromPtr(runtime_value) == 0) {
                 std.debug.print(":nullptr", .{});
             } else if (info.child == u8) {
                 std.debug.print("\"{s}\"", .{runtime_value});
             } else {
                 switch (@typeInfo(info.child)) {
-                    .Array => |arrayinf| {
+                    .array => |arrayinf| {
                         if (arrayinf.child == u8) {
                             std.debug.print("\"{s}\"", .{runtime_value.*});
                         } else {
@@ -166,9 +172,9 @@ fn print_value(runtime_value: anytype) void {
 
 fn print_custom_typename(T: type) void {
     switch (@typeInfo(T)) {
-        inline .Pointer => |p| {
+        inline .pointer => |p| {
             switch (@typeInfo(p.child)) {
-                .Array => |array_info| {
+                .array => |array_info| {
                     if (array_info.child == u8) {
                         std.debug.print(":string", .{});
                     } else {
@@ -184,17 +190,17 @@ fn print_custom_typename(T: type) void {
                 },
             }
         },
-        inline .Array => |a| {
+        inline .array => |a| {
             std.debug.print("[:array ", .{});
             print_custom_typename(a.child);
             std.debug.print(" {d}]", .{a.len});
         },
-        inline .Optional => |o| {
+        inline .optional => |o| {
             switch (@typeInfo(o.child)) {
-                .Pointer => |p| {
+                .pointer => |p| {
                     if (p.child == anyopaque) {
                         std.debug.print(":void-pointer", .{});
-                    } else if (@typeInfo(p.child) == .Fn) {
+                    } else if (@typeInfo(p.child) == .@"fn") {
                         std.debug.print("[:function-pointer ", .{});
                         print_custom_typename(p.child);
                         std.debug.print("]", .{});
@@ -209,7 +215,7 @@ fn print_custom_typename(T: type) void {
                 },
             }
         },
-        inline .Fn => |f| {
+        inline .@"fn" => |f| {
             const return_type = f.return_type orelse void;
             std.debug.print("[ ", .{});
             inline for (f.params) |param| {
@@ -231,7 +237,7 @@ fn print_zig_native_typename(T: type) void {
     if (name.len > 2 and std.mem.eql(u8, name[0..2], "c_")) {
         std.debug.print(":{s}", .{@typeName(@Type(@typeInfo(T)))});
     } else if (std.mem.containsAtLeast(u8, name, 1, ".")) {
-        var it = std.mem.split(u8, name, ".");
+        var it = std.mem.splitScalar(u8, name, '.');
         while (it.next() != null) {
             if (it.peek() != null) {
                 const last_dot = it.index.? - 1;
@@ -251,18 +257,18 @@ const DeclInfo = struct {
 fn allDecls(T: type) []const DeclInfo {
     var decllist: []const DeclInfo = &.{};
     const decls: []const std.builtin.Type.Declaration = switch (@typeInfo(T)) {
-        inline .Struct, .Enum, .Union, .Opaque => |container_info| container_info.decls,
+        inline .@"struct", .@"enum", .@"union", .@"opaque" => |container_info| container_info.decls,
         inline else => |_, tag| @compileError(@typeName(T) ++ " should be a container type (struct, union, enum, opaque), but was '" ++ @tagName(tag) ++ "'"),
     };
     for (decls) |decl| {
         if (!std.mem.eql(u8, decl.name[0..1], "_")) {
             const info = @typeInfo(@TypeOf(@field(T, decl.name)));
             switch (info) {
-                .Fn, .Struct, .Type => {
-                    decllist = decllist ++ .{.{ .name = decl.name, .info = info }};
+                .@"fn", .@"struct", .type => {
+                    decllist = decllist ++ [_]DeclInfo{.{ .name = decl.name, .info = info }};
                 },
                 else => {
-                    decllist = decllist ++ .{.{ .name = decl.name, .info = info }};
+                    decllist = decllist ++ [_]DeclInfo{.{ .name = decl.name, .info = info }};
                 },
             }
         }
