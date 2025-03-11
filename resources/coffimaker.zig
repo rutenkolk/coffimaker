@@ -2,6 +2,7 @@ const std = @import("std");
 const print = std.debug.print;
 const os = std.os;
 const c = @import("<<__ZIGCLJ_TRANSLATED_HEADER__>>");
+const extreme_smoke_test = @import("./extreme_smoke_test.zig");
 
 pub fn print_native_type_conversion(T: type) void {
     std.debug.print(" \"{s}\" \"{s}\"", .{
@@ -32,9 +33,10 @@ pub fn main() void {
     //std.time.sleep(1000000000);
     std.debug.print("\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n", .{});
     //print_all_native_type_conversions();
+	 const run_extreme_smoke_test = false; //TODO: hook into build setup
 
     std.debug.print("[\n", .{});
-    print_module_decls(c);
+    print_module_decls(if (run_extreme_smoke_test) extreme_smoke_test else c);
     std.debug.print("\n]\n", .{});
 }
 
