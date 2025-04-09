@@ -134,6 +134,18 @@ fn print_value(runtime_value: anytype) void {
         .Float, .Int => {
             std.debug.print("{d}", .{runtime_value});
         },
+        .Optional => |o| {
+            switch (@typeInfo(o.child)) {
+                .Pointer => {
+                    std.debug.print("[:pointer ", .{});
+                    print_value(@intFromPtr(runtime_value));
+                    std.debug.print("]", .{});
+                },
+                else => {
+                    print_value(runtime_value.?);
+                },
+            }
+        },
         .Pointer => |info| {
             if (@intFromPtr(runtime_value) == 0) {
                 std.debug.print(":nullptr", .{});

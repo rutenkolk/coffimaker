@@ -41,6 +41,9 @@
     ValueLayout$OfDouble)
    (java.nio ByteOrder)))
 
+(defn- ffilter [pred coll]
+  (some #(when (pred %) %) coll))
+
 (defn doall-with-coffi-ns [ns-name forms]
   (do
     (create-ns ns-name)
@@ -108,15 +111,57 @@
         _ (copy-resource-to "coffimaker.zig" tmp {"<<__ZIGCLJ_TRANSLATED_HEADER__>>" (str header-name ".zig")})
         build-file (copy-resource-to "build.zig" tmp)
         translated-file (rfs/file tmp (str header-name ".zig"))
-        translate-result (z/translate-c-header! header opts)
+        translate-results (z/translate-c-header! header opts)
+        zig-source (:zig-source translate-results)
         ]
-    (if (not (string? translate-result))
-      translate-result
-      (let [_ (spit translated-file (z/post-process-header-translation translate-result))
+    (if (not (string? zig-source))
+      translate-results
+      (let [_ (spit translated-file zig-source)
             build-output (with-sh-dir (str tmp) (z/zig :build :run))]
         (if (= 0 (:exit build-output))
           (edn/read-string (:err build-output))
           build-output)))))
+
+(defn translate-c-header! [header opts]
+  (z/prepare-zig!)
+  (let [header-name (rfs/name (io/file header))
+        tmp (rfs/temp-dir "coffimaker")
+        _ (copy-resource-to "coffimaker.zig" tmp {"<<__ZIGCLJ_TRANSLATED_HEADER__>>" (str header-name ".zig")})
+        build-file (copy-resource-to "build.zig" tmp)
+        translated-file (rfs/file tmp (str header-name ".zig"))
+        translate-results (z/translate-c-header! header opts)
+        zig-source (:zig-source translate-results)
+        _ (if (string? zig-source) (spit translated-file zig-source))]
+    (assoc
+     translate-results
+     :tmp tmp
+     :translated-file translated-file)))
+
+(defn- remove-zigclj-from-name [kw]
+  (->> (-> kw name (s/split #"__") nnext) (s/join "__") (keyword (str (namespace kw)))))
+
+(defmulti rewrite-zigclj-form #(if (-> % :name name (s/starts-with? "zigclj__")) (-> % :name name (s/split #"__") second (s/replace \_ \-) keyword)))
+
+(defmethod rewrite-zigclj-form :default [x] x)
+
+(defmethod rewrite-zigclj-form :extern-const [{:keys [type name alias-of]}]
+  {:type :extern-const
+   :name (remove-zigclj-from-name name)
+   :kind alias-of})
+
+(defmethod rewrite-zigclj-form :extern-var [{:keys [type name alias-of]}]
+  {:type :extern-var
+   :name (remove-zigclj-from-name name)
+   :kind alias-of})
+
+(defn- rewrite-zigclj-forms [info]
+  (->> info (map rewrite-zigclj-form) vec))
+
+(defn build-translate-dir! [dir]
+  (let [build-output (with-sh-dir (str dir) (z/zig :build :run))]
+    (if (= 0 (:exit build-output))
+      (rewrite-zigclj-forms (edn/read-string (:err build-output)))
+      build-output)))
 
 (defmacro def- [name & decls]
   (list* `def (with-meta name (assoc (meta name) :private true)) decls))
@@ -149,9 +194,11 @@
 (defn- i8      [name] [name ::mem/byte])
 (defn- i16     [name] [name ::mem/short])
 (defn- i32     [name] [name ::mem/int])
+(defn- i64     [name] [name ::mem/long])
 (defn- ui8     [name] [name ::mem/byte])
 (defn- ui16    [name] [name ::mem/short])
 (defn- ui32    [name] [name ::mem/int])
+(defn- ui64    [name] [name ::mem/long])
 (defn- u8      [name] [name ::mem/byte])
 (defn- u16     [name] [name ::mem/short])
 (defn- u32     [name] [name ::mem/int])
@@ -166,17 +213,21 @@
    :i8             ::mem/byte
    :i16            ::mem/short
    :i32            ::mem/int
+   :i64            ::mem/long
    :ui8            ::mem/byte
    :ui16           ::mem/short
    :ui32           ::mem/int
+   :ui64           ::mem/long
    :u8             ::mem/byte
    :u16            ::mem/short
    :u32            ::mem/int
+   :u64            ::mem/long
    :bool           ::mem/boolean
    [:pointer :u8]  ::mem/c-string
    :pointer        ::mem/pointer
    :void-pointer   ::mem/pointer
-   :void           ::mem/void})
+   :void           ::mem/void
+   :noreturn       ::mem/void})
 
 (def- primitive-class-conversion
   {::mem/float     'float
@@ -212,8 +263,7 @@
     (keyword? t)                       t
     (= :pointer (first t))             [::mem/pointer (typename-conversion (second t))]
     (= :array (first t))               [::mem/array (typename-conversion (second t)) (nth t 2)]
-    (= :function-pointer (first t))    [::ffi/fn (vec (map typename-conversion (drop-last (second t)))) (typename-conversion (last (second t)))]
-    ))
+    (= :function-pointer (first t))    [::ffi/fn (vec (map typename-conversion (drop-last (second t)))) (typename-conversion (last (second t)))]))
 
 (defn- typed-decl [[t declname]]
   [declname (typename-conversion t)])
@@ -250,7 +300,7 @@
   )
 
 (defn gen-opaque [{:keys [name] :as v}]
-  `(mem/defalias ~name ~:coffi.mem/byte))
+  `(mem/defalias ~name ~:coffi.mem/void))
 
 (defn gen-type [{:keys [kind] :as v}]
   ((case kind
@@ -290,17 +340,128 @@
        ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
        ~(typename-conversion return-type))))
 
+(defmulti generate-form :type)
+(defmethod generate-form :default  [x] (println "no `generate-form` registered for type" (:type x) ".\nvalue was:\n" x))
+(defmethod generate-form :type     [x] (gen-type x))
+(defmethod generate-form :constant [x] (gen-constant x))
+(defmethod generate-form :fn       [x] (gen-fn x))
+(defmethod generate-form :extern-var [{:keys [name kind]}]
+  `(ffi/defvar ~(symbol (clojure.core/name name)) ~(clojure.core/name name) ~(typename-conversion kind)))
+(defmethod generate-form :extern-const [{:keys [name kind]}]
+  `(ffi/defvar ~(symbol (clojure.core/name name)) ~(clojure.core/name name) ~(typename-conversion kind)))
+
 (defn generate-from-header-info [header-info]
-  (->>
-   header-info
-   (map #(case (:type %)
-           :type     (gen-type %)
-           :constant (gen-constant %)
-           :fn       (gen-fn %)))
-   (filter identity)
-   (doall)))
+  (->> header-info
+       (map generate-form)
+       (filter identity)
+       (doall)))
+
+(defn find-all-header-symbols [header-info]
+  (->> header-info
+       (filter (comp #{:fn :external-var :external-const} :type))
+       (map #(vector (:name %) (-> % :name name ffi/find-symbol)))
+       (into {})))
+
+(defn remove-missing-symbol-declarations [header-info]
+  (filterv (comp not (->> header-info find-all-header-symbols (remove second) (map first) set) :name) header-info))
+
+(deftype Ptr [seg type meta]
+  IDeref
+  (deref [_]
+    (mem/deserialize-from seg type))
+
+  IObj
+  (withMeta [_ meta-map]
+    (Ptr. seg type (atom meta-map)))
+  IMeta
+  (meta [_]
+    @meta)
+  IReference
+  (resetMeta [_ meta-map]
+    (reset! meta meta-map))
+  (alterMeta [_ f args]
+    (apply swap! meta f args)))
 
 (comment
+
+  (defmethod mem/generate-deserialize :coffi.ffi/fn [_type offset segment-source-form] `(mem/deserialize* (mem/read-address ~segment-source-form ~offset) ~_type))
+  (defmethod mem/generate-serialize :coffi.ffi/fn [_type source-form offset segment-source-form] `(mem/write-address ~segment-source-form ~offset (mem/serialize* ~source-form ~_type (mem/auto-arena))))
+  (defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
+
+  (ffi/load-library "sqlite3.dll")
+
+  (def sqlite-info
+    (-> "../../sqlite-autoconf/sqlite3.h"
+        (translate-c-header! {:compile-error-replacements {"SQLITE_EXTERN" "\n"}})
+        :tmp
+        build-translate-dir!))
+
+  (doall-with-coffi-ns 'sqlite3 (generate-from-header-info (map #(assoc % :params [[[:pointer :u8] :filename] [:pointer :ppDb]]) (filter #(= :sqlite3_open (:name %)) (remove-missing-symbol-declarations sqlite-info)))))
+
+  (doall-with-coffi-ns 'sqlite3 (generate-from-header-info (remove-missing-symbol-declarations sqlite-info)))
+
+  @sqlite3/sqlite3_version
+
+  (def db (mem/alloc-instance [::mem/pointer :sqlite3/sqlite3]))
+  (def stmt (mem/alloc-instance [::mem/pointer :sqlite3/stmt]))
+  (def dbptr (mem/alloc-instance [::mem/pointer [::mem/pointer :sqlite3/sqlite3]]))
+
+  (def db (mem/alloc-instance [::mem/pointer ::mem/void]))
+  (def stmt (mem/alloc-instance [::mem/pointer :sqlite3/stmt]))
+  (def dbptr (mem/alloc-instance [::mem/pointer [::mem/pointer ::mem/void]]))
+
+  (def db (mem/alloc-instance ::mem/pointer))
+  (def stmt (mem/alloc-instance [::mem/pointer :sqlite3/stmt]))
+  (def dbptr (mem/alloc-instance [::mem/pointer ::mem/pointer]))
+
+  (mem/address-of db)
+  (mem/address-of (mem/read-address dbptr))
+
+  (mem/address-of (mem/read-address (& db)))
+
+  (mem/address-of db)
+
+
+  (mem/write-address dbptr db)
+
+  (mem/c-layout [::mem/pointer [::mem/pointer :sqlite3/sqlite3]])
+
+  (mem/c-layout :sqlite3/sqlite3)
+
+  (defmethod mem/c-layout ::mem/void [_] (MemoryLayout/sequenceLayout 0 mem/byte-layout))
+
+  (defmethod mem/serialize-into ::mem/void [obj type segment arena] nil)
+
+  (mem/primitive-type :sqlite3/sqlite3)
+
+  (defmethod mem/serialize* ::mem/pointer
+    [obj type arena]
+    (if-not (mem/null? obj)
+      (if (sequential? type)
+        (let [segment (mem/alloc-instance (second type) arena)]
+          (mem/serialize-into obj (second type) segment arena)
+          segment)
+        obj)
+      mem/null))
+
+
+
+  (sqlite3/sqlite3_open_v2 "expenses.db" (& db) sqlite3/SQLITE_OPEN_READWRITE "")
+
+  (defn & [p]
+    (let [pp (mem/alloc-instance ::mem/pointer)]
+      (mem/write-address pp p)
+      pp))
+
+  (sqlite3/sqlite3_open "expenses.db" db)
+
+  (sqlite3/sqlite3_prepare_v2 db "select * from expenses" -1 (& stmt) mem/null)
+  (sqlite3/sqlite3_step stmt)
+
+
+
+
+
   (def raylib-header-info
     (c-header-info
      "../raylib/src/raylib.h"
@@ -308,6 +469,191 @@
                                    "RL_CALLOC"  "\n"
                                    "RL_REALLOC" "\n"
                                    "RL_FREE"    "\n"}}))
+
+  (c-header-info
+   "../cpu_features/include/cpuinfo_x86.h"
+   {:remove-underscore false
+    :compile-error-replacements {"__thiscall" "\n"
+                                 "__INT64_C_SUFFIX__" "\n"
+                                 "__UINTMAX_C_SUFFIX__" "\n"
+                                 "__UINT32_C_SUFFIX__" "\n"
+                                 "_cdecl" "\n"
+                                 "__declspec" "\n"
+                                 "_pascal" "\n"
+                                 "_stdcall" "\n"
+                                 "__seg_fs" "\n"
+                                 "__fastcall" "\n"
+                                 "_thiscall" "\n"
+                                 "__stdcall" "\n"
+                                 "__seg_gs" "\n"
+                                 "_fastcall" "\n"
+                                 "__pascal" "\n"
+                                 "CPU_FEATURES_DEPRECATED" "\n"
+                                 "__UINT64_C_SUFFIX__" "\n"
+                                 "__cdecl" "\n"
+                                 "__INTMAX_C_SUFFIX__" "\n"}})
+
+  (let [{:keys [zig-source declarations tmp translated-file]}
+        (translate-c-header!
+         "../cpu_features/include/cpuinfo_x86.h"
+         {:remove-underscore false
+          :compile-error-replacements {"__thiscall" "\n"
+                                       "__INT64_C_SUFFIX__" "\n"
+                                       "__UINTMAX_C_SUFFIX__" "\n"
+                                       "__UINT32_C_SUFFIX__" "\n"
+                                       "_cdecl" "\n"
+                                       "__declspec" "\n"
+                                       "_pascal" "\n"
+                                       "_stdcall" "\n"
+                                       "__seg_fs" "\n"
+                                       "__fastcall" "\n"
+                                       "_thiscall" "\n"
+                                       "__stdcall" "\n"
+                                       "__seg_gs" "\n"
+                                       "_fastcall" "\n"
+                                       "__pascal" "\n"
+                                       "CPU_FEATURES_DEPRECATED" "\n"
+                                       "__UINT64_C_SUFFIX__" "\n"
+                                       "__cdecl" "\n"
+                                       "__INTMAX_C_SUFFIX__" "\n"}})]
+    (->> declarations
+         (filter (comp #{"X86Features"} :name))
+         first
+         :full-match
+         (#(s/replace zig-source % "pub const X86Features = [10]u8;"))
+         (spit translated-file))
+    (->> (build-translate-dir! tmp)
+         generate-from-header-info
+         #_(doall-with-coffi-ns 'cpuinfo_x86))
+   )
+
+  (ffi/find-symbol 'GetX86Info)
+  (ffi/find-symbol "GetX86Info")
+
+  (ffi/load-library "cpu_features.dll")
+
+
+  (doall-with-coffi-ns 'raylib (generate-from-header-info raylib-header-info))
+
+
+(c-header-info
+   "../cpu_features/include/cpuinfo_x86.h"
+   {:remove-underscore false
+    :compile-error-replacements {"__thiscall" "\n"
+                                 "__INT64_C_SUFFIX__" "\n"
+                                 "__UINTMAX_C_SUFFIX__" "\n"
+                                 "__UINT32_C_SUFFIX__" "\n"
+                                 "_cdecl" "\n"
+                                 "__declspec" "\n"
+                                 "_pascal" "\n"
+                                 "_stdcall" "\n"
+                                 "__seg_fs" "\n"
+                                 "__fastcall" "\n"
+                                 "_thiscall" "\n"
+                                 "__stdcall" "\n"
+                                 "__seg_gs" "\n"
+                                 "_fastcall" "\n"
+                                 }})
+
+(c-header-info
+   "../../sqlite-autoconf/sqlite3.h"
+   {:remove-underscore true
+    :compile-error-replacements {"SQLITE_EXTERN" "\n"
+                                 }})
+
+(generate-from-header-info sqlite-info)
+
+(edn/read-string (slurp "/Users/Kristin/AppData/Local/Temp/coffimaker1742415018048-903378652/out.edn"))
+
+(ffi/load-library "sqlite3.dll")
+
+(ffi/defvar sqlite-temp-dir "sqlite3_temp_directory" ::mem/c-string)
+@sqlite-temp-dir
+
+(ffi/defvar sqlite3_version "sqlite3_version" ::mem/c-string)
+
+(mem/deserialize* (ffi/find-symbol "sqlite3_version") ::mem/c-string)
+
+(mem/deserialize (ffi/find-symbol "sqlite3_version") ::mem/c-string)
+
+(mem/deserialize-from (ffi/find-symbol "sqlite3_version") ::mem/c-string)
+
+(mem/size-of ::mem/long)
+
+(into {} (.canonicalLayouts (java.lang.foreign.Linker/nativeLinker))) "long"
+
+(defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
+
+(mem/primitive-type ::mem/c-string)
+
+(type sqlite3_version)
+
+@sqlite3_version
+
+(ffi/find-symbol "sqlite3_version")
+
+((ffi/cfn "sqlite3_libversion" [] ::mem/c-string))
+
+  (z/translate-c-header!
+   "../cpu_features/include/cpuinfo_x86.h"
+   {:remove-underscore false
+    :compile-error-replacements {"__thiscall" "\n"
+                                 "__INT64_C_SUFFIX__" "\n"
+                                 "__UINTMAX_C_SUFFIX__" "\n"
+                                 "__UINT32_C_SUFFIX__" "\n"
+                                 "_cdecl" "\n"
+                                 "__declspec" "\n"
+                                 "_pascal" "\n"
+                                 "_stdcall" "\n"
+                                 "__seg_fs" "\n"
+                                 "__fastcall" "\n"
+                                 "_thiscall" "\n"
+                                 "__stdcall" "\n"
+                                 "__seg_gs" "\n"
+                                 "_fastcall" "\n"
+                                 "__pascal" "\n"
+                                 "CPU_FEATURES_DEPRECATED" "\n"
+                                 "__UINT64_C_SUFFIX__" "\n"
+                                 "__cdecl" "\n"
+                                 "__INTMAX_C_SUFFIX__" "\n"}})
+
+
+
+(s/replace
+ "pub extern fn sqlite3_exec(?*sqlite3, sql: [*c]const u8, callback: ?*const fn (?*anyopaque, c_int, [*c][*c]u8, [*c][*c]u8) callconv(.C) c_int, ?*anyopaque, errmsg: [*c][*c]u8) c_int; "
+ #"pub extern fn ([^\)]+?)\((.*?)\)\s[^;()]+;"
+ (fn [[full fn-name params-match]]
+   (->> params-match
+        (remove-parens)
+        (re-seq #"\s?([^,]+)")
+        (map second)
+        (map #(first (re-seq #"\s?([^:,]+?):|," %)))
+        (map #(if (nil? %) "_" (second %)))
+        (map #(s/replace % #"\"" ""))
+        (map #(s/replace % #"@" ""))
+        (map #(str \" % \"))
+        (s/join ", " ))))
+
+(s/replace
+ "?*sqlite3, sql: [*c]const u8, callback: ?*const fn (?*anyopaque, c_int, [*c][*c]u8, () [*c][*c]u8) callconv(.C) c_int, ?*anyopaque, errmsg: [*c][*c]u8 "
+ #"\([^\(\)]*?\)"
+ ""
+ )
+
+(->>
+ ["?*sqlite3" " sql: [*c]const u8" " callback: ?*const fn  callconv c_int" " ?*anyopaque" " errmsg: [*c][*c]u8 " ]
+ (map #(first (re-seq #"\s?([^:,]+?):|," %)))
+ (map #(if (nil? %) "_" (second %)))
+ )
+
+(remove-parens "?*sqlite3, sql: [*c]const u8, callback: ?*const fn (?*anyopaque, c_int, [*c][*c]u8, ( () () ) [*c][*c]u8) callconv(.C) c_int, ?*anyopaque, errmsg: [*c][*c]u8 ")
+
+(->>
+ "?*sqlite3, sql: [*c]const u8, callback: ?*const fn (?*anyopaque, c_int, [*c][*c]u8, [*c][*c]u8 "
+ (re-seq #"")
+     )
+
+  (slurp (io/input-stream (io/resource "coffimaker.zig")))
 
   (set! *print-meta* true)
 
@@ -317,6 +663,8 @@
    raylib-header-info
    (generate-from-header-info)
    (doall-with-coffi-ns 'raylib))
+
+  (def state (atom [(System/nanoTime) []]))
 
   (do
     (raylib/InitWindow 800 450 "raylib-clj [core] example - basic window")
@@ -336,6 +684,20 @@
         (raylib/DrawText (str "fps: " average-fps ) 190 380 20 raylib/BLACK)
         (raylib/EndDrawing)))
     (raylib/CloseWindow))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
   )
 
