@@ -13,6 +13,7 @@
    [coffi.ffi :as ffi]
    [coffi.mem :as mem]
    [coffi.layout :as layout]
+   [clojure.core.async :as async]
    )
   (:import
    (clojure.lang
@@ -265,6 +266,9 @@
     (= :array (first t))               [::mem/array (typename-conversion (second t)) (nth t 2)]
     (= :function-pointer (first t))    [::ffi/fn (vec (map typename-conversion (drop-last (second t)))) (typename-conversion (last (second t)))]))
 
+(defn- pointer-erasure [t]
+  (if (and (vector? t) (= ::mem/pointer (first t))) ::mem/pointer t))
+
 (defn- typed-decl [[t declname]]
   [declname (typename-conversion t)])
 
@@ -290,7 +294,7 @@
    `object-array))
 
 (defn- memberlist-typename-conversion [l]
-  (vec (reduce concat (map (fn [[type name]] [(typename-conversion type) (symbol (clojure.core/name name))]) l))))
+  (vec (reduce concat (map (fn [[type name]] [(pointer-erasure (typename-conversion type)) (symbol (clojure.core/name name))]) l))))
 
 (defn gen-struct [{:keys [name members] :as v}]
   `(mem/defstruct ~(symbol (clojure.core/name name)) ~(vec (reduce concat (map (fn [[type name]] [(symbol (clojure.core/name name)) (typename-conversion type)]) members)))))
@@ -338,7 +342,7 @@
        {:arglists '~(list (vec (map (comp symbol #(subs % 1) str second) params)))}
        ~(symbol (clojure.core/name name))
        ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
-       ~(typename-conversion return-type))))
+       ~(pointer-erasure (typename-conversion return-type)))))
 
 (defmulti generate-form :type)
 (defmethod generate-form :default  [x] (println "no `generate-form` registered for type" (:type x) ".\nvalue was:\n" x))
@@ -365,28 +369,22 @@
 (defn remove-missing-symbol-declarations [header-info]
   (filterv (comp not (->> header-info find-all-header-symbols (remove second) (map first) set) :name) header-info))
 
-(deftype Ptr [seg type meta]
-  IDeref
-  (deref [_]
-    (mem/deserialize-from seg type))
+(defmethod mem/generate-deserialize :coffi.ffi/fn [_type offset segment-source-form] `(mem/deserialize* (mem/read-address ~segment-source-form ~offset) ~_type))
+(defmethod mem/generate-serialize :coffi.ffi/fn [_type source-form offset segment-source-form] `(mem/write-address ~segment-source-form ~offset (mem/serialize* ~source-form ~_type (mem/auto-arena))))
+(defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
 
-  IObj
-  (withMeta [_ meta-map]
-    (Ptr. seg type (atom meta-map)))
-  IMeta
-  (meta [_]
-    @meta)
-  IReference
-  (resetMeta [_ meta-map]
-    (reset! meta meta-map))
-  (alterMeta [_ f args]
-    (apply swap! meta f args)))
+
+
 
 (comment
 
-  (defmethod mem/generate-deserialize :coffi.ffi/fn [_type offset segment-source-form] `(mem/deserialize* (mem/read-address ~segment-source-form ~offset) ~_type))
-  (defmethod mem/generate-serialize :coffi.ffi/fn [_type source-form offset segment-source-form] `(mem/write-address ~segment-source-form ~offset (mem/serialize* ~source-form ~_type (mem/auto-arena))))
-  (defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
+
+
+
+
+
+
+
 
   (ffi/load-library "sqlite3.dll")
 
@@ -396,67 +394,55 @@
         :tmp
         build-translate-dir!))
 
-  (doall-with-coffi-ns 'sqlite3 (generate-from-header-info (map #(assoc % :params [[[:pointer :u8] :filename] [:pointer :ppDb]]) (filter #(= :sqlite3_open (:name %)) (remove-missing-symbol-declarations sqlite-info)))))
-
   (doall-with-coffi-ns 'sqlite3 (generate-from-header-info (remove-missing-symbol-declarations sqlite-info)))
 
-  @sqlite3/sqlite3_version
-
-  (def db (mem/alloc-instance [::mem/pointer :sqlite3/sqlite3]))
-  (def stmt (mem/alloc-instance [::mem/pointer :sqlite3/stmt]))
-  (def dbptr (mem/alloc-instance [::mem/pointer [::mem/pointer :sqlite3/sqlite3]]))
-
-  (def db (mem/alloc-instance [::mem/pointer ::mem/void]))
-  (def stmt (mem/alloc-instance [::mem/pointer :sqlite3/stmt]))
-  (def dbptr (mem/alloc-instance [::mem/pointer [::mem/pointer ::mem/void]]))
-
-  (def db (mem/alloc-instance ::mem/pointer))
-  (def stmt (mem/alloc-instance [::mem/pointer :sqlite3/stmt]))
-  (def dbptr (mem/alloc-instance [::mem/pointer ::mem/pointer]))
-
-  (mem/address-of db)
-  (mem/address-of (mem/read-address dbptr))
-
-  (mem/address-of (mem/read-address (& db)))
-
-  (mem/address-of db)
-
-
-  (mem/write-address dbptr db)
-
-  (mem/c-layout [::mem/pointer [::mem/pointer :sqlite3/sqlite3]])
-
-  (mem/c-layout :sqlite3/sqlite3)
-
-  (defmethod mem/c-layout ::mem/void [_] (MemoryLayout/sequenceLayout 0 mem/byte-layout))
-
-  (defmethod mem/serialize-into ::mem/void [obj type segment arena] nil)
-
-  (mem/primitive-type :sqlite3/sqlite3)
-
-  (defmethod mem/serialize* ::mem/pointer
-    [obj type arena]
-    (if-not (mem/null? obj)
-      (if (sequential? type)
-        (let [segment (mem/alloc-instance (second type) arena)]
-          (mem/serialize-into obj (second type) segment arena)
-          segment)
-        obj)
-      mem/null))
 
 
 
-  (sqlite3/sqlite3_open_v2 "expenses.db" (& db) sqlite3/SQLITE_OPEN_READWRITE "")
 
-  (defn & [p]
-    (let [pp (mem/alloc-instance ::mem/pointer)]
-      (mem/write-address pp p)
-      pp))
 
-  (sqlite3/sqlite3_open "expenses.db" db)
 
-  (sqlite3/sqlite3_prepare_v2 db "select * from expenses" -1 (& stmt) mem/null)
-  (sqlite3/sqlite3_step stmt)
+
+
+
+
+  (def dbptr (mem/alloc-instance ::mem/pointer)) ; dbptr is sqlite3**
+  (def stmtptr (mem/alloc-instance ::mem/pointer)) ;stmtptr is sqlite3_stmt**
+
+  (sqlite3/sqlite3_open "expenses.db" dbptr)
+  (def db (mem/read-address dbptr)) ; db is sqlite3*
+
+  (sqlite3/sqlite3_prepare_v2 db "select * from Lmao" -1 stmtptr mem/null)
+
+  (def stmt (mem/read-address stmtptr))
+
+  (defn get-current-sqlite-col [stmt]
+    (vec
+     (for [i (range (sqlite3/sqlite3_column_count stmt))]
+       (condp = (sqlite3/sqlite3_column_type stmt i)
+         sqlite3/SQLITE_INTEGER (sqlite3/sqlite3_column_int stmt i)
+         sqlite3/SQLITE_FLOAT   (sqlite3/sqlite3_column_double stmt i)
+         sqlite3/SQLITE3_TEXT   (sqlite3/sqlite3_column_text stmt i)))))
+
+  (defn sqlite-has-next [stmt]
+    (not= sqlite3/SQLITE_DONE (sqlite3/sqlite3_step stmt)))
+
+  (defn get-next-sqlite-col [stmt]
+    (if (sqlite-has-next stmt) (get-current-sqlite-col stmt)))
+
+  (defn get-all-sqlite-cols [stmt]
+    (->> #(get-next-sqlite-col stmt) repeatedly (take-while some?) vec))
+
+  (get-all-sqlite-cols stmt)
+
+  (sqlite3/sqlite3_finalize stmt)
+  (sqlite3/sqlite3_close db)
+
+
+
+
+
+
 
 
 
@@ -657,6 +643,33 @@
 
   (set! *print-meta* true)
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
   (ffi/load-library "raylib.dll")
 
   (->>
@@ -664,30 +677,28 @@
    (generate-from-header-info)
    (doall-with-coffi-ns 'raylib))
 
-  (def state (atom [(System/nanoTime) []]))
+  (def state (atom {:last-time (System/nanoTime) :acc []}))
 
-  (do
+  (def factor 1000000000)
+
+  (async/thread
     (raylib/InitWindow 800 450 "raylib-clj [core] example - basic window")
     (raylib/SetTargetFPS 10000)
     (while (not (raylib/WindowShouldClose))
-      (let [[last-time acc] @state
+      (let [{:keys [last-time acc f]} @state
             newtime (System/nanoTime)
             diff (- newtime last-time)
-            newacc (vec (take-last 500 (conj acc diff)))
+            newacc (vec (take-last 5000 (conj acc diff)))
             average-diff (/ (reduce + newacc) (count newacc))
             average-fps (long (/ 1000000000 average-diff))]
-        (reset! state [newtime newacc])
+        (swap! state assoc :last-time newtime :acc newacc)
         (raylib/BeginDrawing)
         (raylib/ClearBackground raylib/RAYWHITE)
         (raylib/DrawText "Congrats! You created your first raylib window!" 190 200 20 raylib/BLACK)
-        (raylib/DrawText "And you did it from clojure!" (int (+ 190 (rand 5))) 240 20 raylib/DARKBLUE)
+        (raylib/DrawText "And you did it from clojure!" (int (+ 190 (* 50 (Math/sin (/ newtime factor))))) 240 20 raylib/DARKBLUE)
         (raylib/DrawText (str "fps: " average-fps ) 190 380 20 raylib/BLACK)
         (raylib/EndDrawing)))
     (raylib/CloseWindow))
-
-
-
-
 
 
 
