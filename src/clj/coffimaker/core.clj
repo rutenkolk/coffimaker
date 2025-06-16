@@ -373,7 +373,31 @@
 (defmethod mem/generate-serialize :coffi.ffi/fn [_type source-form offset segment-source-form] `(mem/write-address ~segment-source-form ~offset (mem/serialize* ~source-form ~_type (mem/auto-arena))))
 (defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
 
+(defn- transform-argmod [argmod]
+  (if (seqable? (first argmod))
+      (mapv transform-argmod argmod)
+      (let [replacement-map {:! ::mutate :mutate ::mutate :in ::in :out ::out :as-array ::as-array :with-ptr ::with-ptr :- ::exclude}
+         [pre-opts [pre-a b]] (split-at (- (count argmod) 2) argmod)
+         a (get {:! ::mutate} pre-a pre-a)
+         opts (->> pre-opts (map #(get replacement-map % %)) set)]
+     (cond
+       (::exclude opts) {:type ::exclude}
+       (or (and (empty? opts) (-> a namespace nil?))
+           (::in opts)) {:type ::in-list :pointer-argument a :count-argument b}
+       (and (empty? opts) (= a ::mutate)) {:type ::mutating-argument :argument b}
+       (and (empty? opts) (= a ::out)) {:type ::out-argument :argument b}
+       (and (::out opts) (namespace a) (-> a name (= "return")))
+         (cond-> {:type ::return-list :count-argument b}
+           (::as-array opts) (assoc :as-array true)
+           (::with-ptr opts) (assoc :with-ptr true))
+       (::out opts) (cond-> {:type ::out-list :pointer-argument a :count-argument b}
+                      (::as-array opts) (assoc :as-array true)
+                      (::with-ptr opts) (assoc :with-ptr true))
+       :else argmod))))
 
+(defn add-generation-info [generation-info header-info]
+  (let [processed-info (update-vals generation-info transform-argmod)]
+    (map #(or (some->> % :name processed-info (assoc % :generation-info)) %) header-info)))
 
 
 (comment
