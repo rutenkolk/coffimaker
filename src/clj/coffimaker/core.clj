@@ -3,6 +3,7 @@
   (:require
    [clojure.java.io :as io]
    [clojure.string :as s]
+   [clojure.set :as sets]
    [clojure.pprint :as pprint]
    [clojure.java.shell :refer [sh with-sh-dir]]
    [cheshire.core :as json]
@@ -264,7 +265,8 @@
     (keyword? t)                       t
     (= :pointer (first t))             [::mem/pointer (typename-conversion (second t))]
     (= :array (first t))               [::mem/array (typename-conversion (second t)) (nth t 2)]
-    (= :function-pointer (first t))    [::ffi/fn (vec (map typename-conversion (drop-last (second t)))) (typename-conversion (last (second t)))]))
+    (= :function-pointer (first t))    [::ffi/fn (vec (map typename-conversion (drop-last (second t)))) (typename-conversion (last (second t)))]
+    :else t))
 
 (defn- pointer-erasure [t]
   (if (and (vector? t) (= ::mem/pointer (first t))) ::mem/pointer t))
@@ -326,7 +328,7 @@
                     :array (str (argtype-to-str snd) "[" trd "]")
                     (str "[" (s/join " " (map argtype-to-str v)) "]")))))
 
-(defn gen-fn [{:keys [name params return-type]}]
+(defn- gen-fn-default [{:keys [name params return-type generation-info] :as fn-info}]
   (let [docstr (str
                 (if (= params []) "()")
                 (->> params
@@ -343,6 +345,241 @@
        ~(symbol (clojure.core/name name))
        ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
        ~(pointer-erasure (typename-conversion return-type)))))
+
+(def gen-fn-info-types #{::in-list ::out-list ::return-list ::out-argument ::mutating-argument ::exclude})
+
+(defmulti gen-fn-alt #(some->> % :generation-info (map :type) set))
+
+(defmethod gen-fn-alt nil [x] (gen-fn-default x))
+
+(defn- ->sym
+  ([x] (-> x clojure.core/name symbol))
+  ([x postfix] (-> x clojure.core/name (str postfix) symbol)))
+
+(defn mapp [pred f coll]
+  (map #(if (pred %) (f %) %) coll))
+
+(defn- in-list-info [generation-info]
+  (let [info (filter #(-> % :type (= ::in-list)) generation-info)
+        pairmap (->> info (mapv #(vector (:pointer-argument %) (:count-argument %))) (into (hash-map)))
+        [list-args count-args] (map set (apply map vector pairmap))
+        process-fn (fn [params]
+                     (->> params
+                          (filter (comp not count-args second))
+                          (mapp #(-> % second list-args) #(update % 0 (fn [x] [(second x)])))))
+        ]
+
+    {:info info
+     :pairmap pairmap
+     :list-args list-args
+     :count-args count-args
+     :process-params-fn process-fn}
+
+    ))
+
+(defn- in-list-info [generation-info]
+  (let [info (filter #(-> % :type (= ::in-list)) generation-info)
+        pairmap (->> info (mapv #(vector (:pointer-argument %) (:count-argument %))) (into (hash-map)))
+        [list-args count-args] (map set (if (seq pairmap) (apply map vector pairmap) [#{} #{}]))
+        process-fn (fn [params]
+                     (->> params
+                          (filter (comp not count-args second))
+                          (mapp #(-> % second list-args) #(update % 0 (fn [x] [(second x)])))))
+        ]
+
+    {:info info
+     :pairmap pairmap
+     :list-args list-args
+     :count-args count-args
+     :process-params-fn process-fn}
+
+    ))
+
+(defn- out-list-info [generation-info]
+  (let [info (filter #(-> % :type (= ::out-list)) generation-info)
+        pairmap (->> info (mapv #(vector (:pointer-argument %) (:count-argument %))) (into (hash-map)))
+        [list-args count-args] (map set (if (seq pairmap) (apply map vector pairmap) [#{} #{}]))
+        process-fn (fn [params]
+                     (->> params
+                          (filter (comp not count-args second))
+                          (filter (comp not list-args second))))
+        as-array? (->> info (mapv #(vector (:pointer-argument %) (:as-array %))) (into (hash-map)))
+        with-ptr? (->> info (mapv #(vector (:pointer-argument %) (:with-ptr %))) (into (hash-map)))
+        ]
+
+    {:info info
+     :pairmap pairmap
+     :list-args list-args
+     :count-args count-args
+     :as-array? as-array?
+     :with-ptr? with-ptr?
+     :process-params-fn process-fn}
+
+    ))
+
+(defn- out-args-info [generation-info]
+  (let [info (filter #(-> % :type (= ::out-argument)) generation-info)
+        out-args (set (map :argument info))
+        process-fn (fn [params]
+                     (->> params (filter (comp not out-args second))))]
+
+    {:info info
+     :out-args out-args
+     :process-params-fn process-fn}))
+
+(defn- return-list-info [generation-info]
+  (let [info (filter #(-> % :type (= ::return-list)) generation-info)
+        count-args (set (map :count-argument info))
+        process-fn (fn [params] (filter (comp not count-args second) params))
+        as-array? (set (map :as-array info))
+        with-ptr? (set (map :with-ptr info))]
+    {:info info
+     :count-args count-args
+     :as-array? as-array?
+     :with-ptr? with-ptr?
+     :process-params-fn process-fn}
+    ))
+
+(defn- mutating-args-info [generation-info]
+  (let [info (filter #(-> % :type (= ::mutating-argument)) generation-info)
+        args (set (map :argument info))
+        process-fn (fn [params] (mapp #(-> % second args) #(update % 0 (fn [x] (second x))) params))]
+    {:info info
+     :args args
+     :process-params-fn process-fn}))
+
+(defmethod gen-fn-alt :default [{:keys [params return-type generation-info] fn-name :name :as fn-info}]
+  (letfn [(param->name
+            ([x] (-> x second name symbol))
+            ([x postfix] (-> x second name (str postfix) symbol)))]
+   (let [ili (in-list-info generation-info)
+         oli (out-list-info generation-info)
+         rli (return-list-info generation-info)
+         rli? (seq (:info rli))
+         oai (out-args-info generation-info)
+         mai (mutating-args-info generation-info)
+
+         il-pairmap (:pairmap ili)
+         ol-pairmap (:pairmap oli)
+
+         ilp-args (:list-args ili)
+         olp-args (:list-args oli)
+
+         in-count-args (:count-args ili)
+         out-count-args (sets/union (:count-args oli) (:count-args rli) (:out-args oai))
+
+         params-processed (->> params ((:process-params-fn ili)) ((:process-params-fn oli)) ((:process-params-fn rli)) ((:process-params-fn oai)) ((:process-params-fn mai)))
+
+         in-listptr-params (filter (comp ilp-args second) params-processed)
+         olp-params (filter (comp olp-args second) params)
+         olc-params (filter (comp out-count-args second) params)
+
+         olc-out-args (->> olc-params
+                           (filter (comp sequential? first))
+                           (filter #(-> % ffirst (= :pointer)))
+                           (map second)
+                           (set))
+
+         deserialize-args (sets/union olc-out-args (:args mai))
+
+         serialize-params (filter (comp (:args mai) second) params)
+         alloc-params (filter (comp olc-out-args second) params)
+         deserialize-params (filter (comp deserialize-args second) params)
+
+         native-fn-symbol (symbol (str (name fn-name) "-native"))
+         arglist (list (mapv (comp symbol second) params-processed))
+
+         return-map (into (hash-map)
+                          (concat (if (not= return-type :void) [[:return-value 'return-value]])
+                                  (if rli? [[:return-value-ptr 'return-value-raw]])
+                                  (map #(vector % (symbol %)) (sets/union olp-args (:out-args oai) (:args mai)))))
+
+         docstr (str
+                 (if (= params []) "()")
+                 (->> params-processed
+                      (map first)
+                      (map typename-conversion)
+                      (map argtype-to-str)
+                      (s/join " "))
+                 " -> "
+                 (argtype-to-str (typename-conversion (cond
+                                                        rli? [(second return-type)]
+                                                        (and (= 1 (count return-map)) (= :void return-type)) (ffirst (filter (comp (set (keys return-map)) second) params-processed))
+                                                        :else return-type))))
+
+         native-fn-call (cons
+                         native-fn-symbol
+                         (map #(param->name % (if ((second %) (sets/union ilp-args olp-args deserialize-args)) "'" "")) params))
+         return-type-processed (if rli? ::mem/pointer (pointer-erasure (typename-conversion return-type)))
+         ]
+     `(ffi/defcfn
+        ~(symbol (name fn-name))
+        ~docstr
+        {:arglists '~arglist}
+        ~(symbol (name fn-name))
+        ~(vec (map (fn [[t n]] (if ((keyword n) ilp-args) ::mem/pointer t)) (partition 2 (memberlist-typename-conversion params))))
+        ~return-type-processed
+        ~native-fn-symbol
+        ~(vec (first arglist))
+
+        (with-open [arena (mem/confined-arena)]
+          (let ~(vec
+                 (apply
+                  concat
+                  (concat
+                   (map (fn [[ptrarg countarg]] `[~(symbol (name countarg))
+                                                  (count ~(symbol (name ptrarg)))])
+                        il-pairmap)
+
+                   (map (fn [x] `[~(param->name x "'")
+                                  (mem/serialize ~(param->name x)
+                                                 [::mem/array
+                                                  ~(typename-conversion (ffirst x))
+                                                  ~(symbol (il-pairmap (second x)))]
+                                                 ~'arena)])
+                        in-listptr-params)
+
+                   (map (fn [x] `[~(param->name x "'")
+                                  (mem/serialize ~(param->name x)
+                                                 ~(typename-conversion (second (first x)))
+                                                 ~'arena)])
+                        serialize-params)
+
+                   (map (fn [x] `[~(param->name x "'")
+                                  (mem/alloc-instance ::mem/pointer ~'arena)])
+                        olp-params)
+
+                   (map (fn [x] `[~(param->name x "'")
+                                  (mem/alloc-instance ~(typename-conversion (second (first x))) ~'arena)])
+                        alloc-params)
+
+                   [['return-value-raw native-fn-call]]
+
+                   (map (fn [x] `[~(param->name x)
+                                  (mem/deserialize-from ~(param->name x "'")
+                                                        ~(typename-conversion (second (first x))))])
+                        deserialize-params)
+
+                   [['return-value (if rli?
+                                     `(mem/deserialize ~'return-value-raw [::mem/array ~(typename-conversion (second return-type)) ~(symbol (first (:count-args rli)))])
+                                     'return-value-raw)]]
+
+                   (map (fn [x] `[~(param->name x)
+                                  (mem/deserialize-from ~(param->name x "'")
+                                                        [::mem/array ~(typename-conversion (get-in x [0 1 1]))
+                                                         ~(symbol (ol-pairmap (second x)))])])
+                        olp-params)
+
+                   )))
+            ~(cond
+               (= 1 (count return-map)) (first (vals return-map))
+               (= 0 (count return-map)) nil
+               :else return-map
+               )
+            ))))))
+
+(defn gen-fn [fn-info]
+  (gen-fn-alt fn-info))
 
 (defmulti generate-form :type)
 (defmethod generate-form :default  [x] (println "no `generate-form` registered for type" (:type x) ".\nvalue was:\n" x))
@@ -396,18 +633,11 @@
        :else argmod))))
 
 (defn add-generation-info [generation-info header-info]
-  (let [processed-info (update-vals generation-info transform-argmod)]
+  (let [processed-info (-> generation-info (update-vals transform-argmod) (update-vals #(if (sequential? %) % [%])))]
     (map #(or (some->> % :name processed-info (assoc % :generation-info)) %) header-info)))
 
 
 (comment
-
-
-
-
-
-
-
 
 
   (ffi/load-library "sqlite3.dll")
