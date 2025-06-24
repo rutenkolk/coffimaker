@@ -328,7 +328,7 @@
                     :array (str (argtype-to-str snd) "[" trd "]")
                     (str "[" (s/join " " (map argtype-to-str v)) "]")))))
 
-(defn- gen-fn-default [{:keys [name params return-type generation-info] :as fn-info}]
+(defn- gen-fn-simple [{:keys [name params return-type] :as fn-info}]
   (let [docstr (str
                 (if (= params []) "()")
                 (->> params
@@ -346,16 +346,6 @@
        ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
        ~(pointer-erasure (typename-conversion return-type)))))
 
-(def gen-fn-info-types #{::in-list ::out-list ::return-list ::out-argument ::mutating-argument ::exclude})
-
-(defmulti gen-fn-alt #(some->> % :generation-info (map :type) set))
-
-(defmethod gen-fn-alt nil [x] (gen-fn-default x))
-
-(defn- ->sym
-  ([x] (-> x clojure.core/name symbol))
-  ([x postfix] (-> x clojure.core/name (str postfix) symbol)))
-
 (defn mapp [pred f coll]
   (map #(if (pred %) (f %) %) coll))
 
@@ -366,16 +356,12 @@
         process-fn (fn [params]
                      (->> params
                           (filter (comp not count-args second))
-                          (mapp #(-> % second list-args) #(update % 0 (fn [x] [(second x)])))))
-        ]
-
+                          (mapp #(-> % second list-args) #(update % 0 (fn [x] [(second x)])))))]
     {:info info
      :pairmap pairmap
      :list-args list-args
      :count-args count-args
-     :process-params-fn process-fn}
-
-    ))
+     :process-params-fn process-fn}))
 
 (defn- in-list-info [generation-info]
   (let [info (filter #(-> % :type (= ::in-list)) generation-info)
@@ -384,16 +370,12 @@
         process-fn (fn [params]
                      (->> params
                           (filter (comp not count-args second))
-                          (mapp #(-> % second list-args) #(update % 0 (fn [x] [(second x)])))))
-        ]
-
+                          (mapp #(-> % second list-args) #(update % 0 (fn [x] [(second x)])))))]
     {:info info
      :pairmap pairmap
      :list-args list-args
      :count-args count-args
-     :process-params-fn process-fn}
-
-    ))
+     :process-params-fn process-fn}))
 
 (defn- out-list-info [generation-info]
   (let [info (filter #(-> % :type (= ::out-list)) generation-info)
@@ -404,8 +386,7 @@
                           (filter (comp not count-args second))
                           (filter (comp not list-args second))))
         as-array? (->> info (mapv #(vector (:pointer-argument %) (:as-array %))) (into (hash-map)))
-        with-ptr? (->> info (mapv #(vector (:pointer-argument %) (:with-ptr %))) (into (hash-map)))
-        ]
+        with-ptr? (->> info (mapv #(vector (:pointer-argument %) (:with-ptr %))) (into (hash-map)))]
 
     {:info info
      :pairmap pairmap
@@ -413,9 +394,7 @@
      :count-args count-args
      :as-array? as-array?
      :with-ptr? with-ptr?
-     :process-params-fn process-fn}
-
-    ))
+     :process-params-fn process-fn}))
 
 (defn- out-args-info [generation-info]
   (let [info (filter #(-> % :type (= ::out-argument)) generation-info)
@@ -437,8 +416,7 @@
      :count-args count-args
      :as-array? as-array?
      :with-ptr? with-ptr?
-     :process-params-fn process-fn}
-    ))
+     :process-params-fn process-fn}))
 
 (defn- mutating-args-info [generation-info]
   (let [info (filter #(-> % :type (= ::mutating-argument)) generation-info)
@@ -448,70 +426,66 @@
      :args args
      :process-params-fn process-fn}))
 
-(defmethod gen-fn-alt :default [{:keys [params return-type generation-info] fn-name :name :as fn-info}]
+(defn- gen-fn-alt [{:keys [params return-type generation-info] fn-name :name :as fn-info}]
   (letfn [(param->name
             ([x] (-> x second name symbol))
-            ([x postfix] (-> x second name (str postfix) symbol)))]
-   (let [ili (in-list-info generation-info)
-         oli (out-list-info generation-info)
-         rli (return-list-info generation-info)
-         rli? (seq (:info rli))
-         oai (out-args-info generation-info)
-         mai (mutating-args-info generation-info)
+            ([x postfix] (-> x second name (str postfix) symbol)))
+          (params-by-args
+            ([args] (filter (comp args second) params))
+            ([args p] (filter (comp args second) p)))]
+   (let [alt-ident "'"
+         {il-pairmap :pairmap ilp-args :list-args il-fn :process-params-fn} (in-list-info generation-info)
+         {ol-pairmap :pairmap olp-args :list-args olc-args :count-args ol-fn :process-params-fn} (out-list-info generation-info)
+         {rlc-args :count-args rl-fn :process-params-fn} (return-list-info generation-info)
+         {out-args :out-args oa-fn :process-params-fn} (out-args-info generation-info)
+         {mutating-args :args ma-fn :process-params-fn} (mutating-args-info generation-info)
 
-         il-pairmap (:pairmap ili)
-         ol-pairmap (:pairmap oli)
+         return-list? (seq rlc-args)
 
-         ilp-args (:list-args ili)
-         olp-args (:list-args oli)
+         params-processed (-> params il-fn ol-fn rl-fn oa-fn ma-fn)
 
-         in-count-args (:count-args ili)
-         out-count-args (sets/union (:count-args oli) (:count-args rli) (:out-args oai))
+         potential-external-write-args (sets/union olc-args rlc-args)
+         external-write-args (->> (params-by-args potential-external-write-args)
+                                  (filter (comp sequential? first))
+                                  (filter #(-> % ffirst (= :pointer)))
+                                  (map second)
+                                  (set)
+                                  (sets/union out-args))
 
-         params-processed (->> params ((:process-params-fn ili)) ((:process-params-fn oli)) ((:process-params-fn rli)) ((:process-params-fn oai)) ((:process-params-fn mai)))
+         deserialize-args (sets/union external-write-args mutating-args)
 
-         in-listptr-params (filter (comp ilp-args second) params-processed)
-         olp-params (filter (comp olp-args second) params)
-         olc-params (filter (comp out-count-args second) params)
+         in-listptr-params (params-by-args ilp-args params-processed)
 
-         olc-out-args (->> olc-params
-                           (filter (comp sequential? first))
-                           (filter #(-> % ffirst (= :pointer)))
-                           (map second)
-                           (set))
-
-         deserialize-args (sets/union olc-out-args (:args mai))
-
-         serialize-params (filter (comp (:args mai) second) params)
-         alloc-params (filter (comp olc-out-args second) params)
-         deserialize-params (filter (comp deserialize-args second) params)
+         [olp-params serialize-params alloc-params deserialize-params]
+         (->> [olp-args mutating-args external-write-args deserialize-args]
+              (map params-by-args))
 
          native-fn-symbol (symbol (str (name fn-name) "-native"))
          arglist (list (mapv (comp symbol second) params-processed))
 
          return-map (into (hash-map)
                           (concat (if (not= return-type :void) [[:return-value 'return-value]])
-                                  (if rli? [[:return-value-ptr 'return-value-raw]])
-                                  (map #(vector % (symbol %)) (sets/union olp-args (:out-args oai) (:args mai)))))
+                                  (if return-list? [[:return-value-ptr 'return-value-raw]])
+                                  (map #(vector % (symbol %)) (sets/union olp-args out-args mutating-args))))
 
-         docstr (str
-                 (if (= params []) "()")
-                 (->> params-processed
-                      (map first)
-                      (map typename-conversion)
-                      (map argtype-to-str)
-                      (s/join " "))
-                 " -> "
-                 (argtype-to-str (typename-conversion (cond
-                                                        rli? [(second return-type)]
-                                                        (and (= 1 (count return-map)) (= :void return-type)) (ffirst (filter (comp (set (keys return-map)) second) params-processed))
-                                                        :else return-type))))
+         docstr (str (if (= params []) "()")
+                     (->> params-processed
+                          (map first)
+                          (map typename-conversion)
+                          (map argtype-to-str)
+                          (s/join " "))
+                     " -> "
+                     (argtype-to-str
+                      (typename-conversion
+                       (cond
+                         return-list? [(second return-type)]
+                         (and (= 1 (count return-map)) (= :void return-type)) (ffirst (filter (comp (set (keys return-map)) second) params-processed))
+                         :else return-type))))
 
-         native-fn-call (cons
-                         native-fn-symbol
-                         (map #(param->name % (if ((second %) (sets/union ilp-args olp-args deserialize-args)) "'" "")) params))
-         return-type-processed (if rli? ::mem/pointer (pointer-erasure (typename-conversion return-type)))
-         ]
+         native-fn-call (->> params
+                             (map #(param->name % (if ((second %) (sets/union ilp-args olp-args deserialize-args)) alt-ident "")))
+                             (cons native-fn-symbol))
+         return-type-processed (if return-list? ::mem/pointer (pointer-erasure (typename-conversion return-type)))]
      `(ffi/defcfn
         ~(symbol (name fn-name))
         ~docstr
@@ -522,64 +496,60 @@
         ~native-fn-symbol
         ~(vec (first arglist))
 
-        (with-open [arena (mem/confined-arena)]
+        (with-open [~'arena (mem/confined-arena)]
           (let ~(vec
-                 (apply
-                  concat
-                  (concat
-                   (map (fn [[ptrarg countarg]] `[~(symbol (name countarg))
-                                                  (count ~(symbol (name ptrarg)))])
-                        il-pairmap)
+                 (concat
 
-                   (map (fn [x] `[~(param->name x "'")
-                                  (mem/serialize ~(param->name x)
-                                                 [::mem/array
-                                                  ~(typename-conversion (ffirst x))
-                                                  ~(symbol (il-pairmap (second x)))]
-                                                 ~'arena)])
-                        in-listptr-params)
+                  (->> il-pairmap
+                       (mapcat (fn [[ptrarg countarg]] `[~(symbol (name countarg)) (count ~(symbol (name ptrarg)))])))
 
-                   (map (fn [x] `[~(param->name x "'")
-                                  (mem/serialize ~(param->name x)
-                                                 ~(typename-conversion (second (first x)))
-                                                 ~'arena)])
-                        serialize-params)
+                  (->> in-listptr-params
+                       (mapcat #(vector (param->name % alt-ident)
+                                        `(mem/serialize ~(param->name %)
+                                                        [::mem/array
+                                                         ~(typename-conversion (ffirst %))
+                                                         ~(symbol (il-pairmap (second %)))]
+                                                        ~'arena))))
 
-                   (map (fn [x] `[~(param->name x "'")
-                                  (mem/alloc-instance ::mem/pointer ~'arena)])
-                        olp-params)
+                  (->> serialize-params
+                       (mapcat #(vector (param->name % alt-ident) `(mem/serialize ~(param->name %)
+                                                                           ~(typename-conversion (second (first %)))
+                                                                           ~'arena))))
 
-                   (map (fn [x] `[~(param->name x "'")
-                                  (mem/alloc-instance ~(typename-conversion (second (first x))) ~'arena)])
-                        alloc-params)
+                  (->> olp-params (mapcat #(vector (param->name % alt-ident) `(mem/alloc-instance ::mem/pointer ~'arena))))
 
-                   [['return-value-raw native-fn-call]]
+                  (->> alloc-params
+                       (mapcat #(vector (param->name % alt-ident)
+                                        `(mem/alloc-instance ~(typename-conversion (second (first %))) ~'arena))))
 
-                   (map (fn [x] `[~(param->name x)
-                                  (mem/deserialize-from ~(param->name x "'")
-                                                        ~(typename-conversion (second (first x))))])
-                        deserialize-params)
+                  ['return-value-raw native-fn-call]
 
-                   [['return-value (if rli?
-                                     `(mem/deserialize ~'return-value-raw [::mem/array ~(typename-conversion (second return-type)) ~(symbol (first (:count-args rli)))])
-                                     'return-value-raw)]]
+                  (->> deserialize-params
+                       (mapcat #(vector (param->name %)
+                                        `(mem/deserialize-from ~(param->name % alt-ident) ~(typename-conversion (second (first %)))))))
 
-                   (map (fn [x] `[~(param->name x)
-                                  (mem/deserialize-from ~(param->name x "'")
-                                                        [::mem/array ~(typename-conversion (get-in x [0 1 1]))
-                                                         ~(symbol (ol-pairmap (second x)))])])
-                        olp-params)
+                  ['return-value
+                   (if return-list?
+                     `(mem/deserialize ~'return-value-raw
+                                       [::mem/array ~(typename-conversion (second return-type)) ~(symbol (first rlc-args))])
+                     'return-value-raw)]
 
-                   )))
+                  (->> olp-params
+                       (mapcat #(vector (param->name %)
+                                        `(mem/deserialize-from ~(param->name % alt-ident)
+                                                               [::mem/array
+                                                                ~(typename-conversion (get-in % [0 1 1]))
+                                                                ~(symbol (ol-pairmap (second %)))]))))))
             ~(cond
                (= 1 (count return-map)) (first (vals return-map))
                (= 0 (count return-map)) nil
-               :else return-map
-               )
-            ))))))
+               :else return-map)))))))
 
 (defn gen-fn [fn-info]
-  (gen-fn-alt fn-info))
+  (cond
+    (= ::exclude (:generation-info fn-info)) nil
+    (:generation-info fn-info) (gen-fn-alt fn-info)
+    :else (gen-fn-simple fn-info)))
 
 (defmulti generate-form :type)
 (defmethod generate-form :default  [x] (println "no `generate-form` registered for type" (:type x) ".\nvalue was:\n" x))
