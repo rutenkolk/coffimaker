@@ -6,7 +6,7 @@
         wiredaemon/zigclj {:mvn/version "0.13.13"}
         wiredaemon/zigclj-native-windows-x86_64 {:mvn/version "0.13.0"}
         wiredaemon/zigclj-native-macos-aarch64 {:mvn/version "0.13.0"}
-        org.suskalo/coffi {:mvn/version "0.6.438"}
+        org.suskalo/coffi {:mvn/version "1.0.615"}
         org.clojure/core.async {:mvn/version "1.8.741"}
         }
 
