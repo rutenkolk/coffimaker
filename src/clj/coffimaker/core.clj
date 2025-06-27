@@ -204,7 +204,7 @@
 (defn- u8      [name] [name ::mem/byte])
 (defn- u16     [name] [name ::mem/short])
 (defn- u32     [name] [name ::mem/int])
-(defn- bool    [name] [name ::mem/boolean])
+(defn- bool    [name] [name ::bool])
 (defn- pointer [name] [name ::mem/pointer])
 
 
@@ -224,7 +224,7 @@
    :u16            ::mem/short
    :u32            ::mem/int
    :u64            ::mem/long
-   :bool           ::mem/boolean
+   :bool           ::bool
    [:pointer :u8]  ::mem/c-string
    :pointer        ::mem/pointer
    :void-pointer   ::mem/pointer
@@ -643,6 +643,37 @@
   (let [processed-info (-> generation-info (update-vals transform-argmod) (update-vals #(if (sequential? %) % [%])))]
     (map #(or (some->> % :name processed-info (assoc % :generation-info)) %) header-info)))
 
+(defmethod mem/primitive-type ::bool [type]
+  (if (sequential? type)
+    (case (second type) 8 ::mem/byte 16 ::mem/short 32 ::mem/int 64 ::mem/long)
+    ::mem/byte))
+
+(defmethod mem/c-layout ::bool [type]
+  (if (sequential? type)
+    (case (second type) 8 mem/byte-layout 16 mem/short-layout 32 mem/int-layout 64 mem/long-layout)
+    mem/byte-layout))
+
+(defmethod mem/deserialize* ::bool [obj _type] (not (zero? obj)))
+
+(defmethod mem/serialize* ::bool [obj type _arena]
+  (let [v (if obj 1 0)]
+   (if (sequential? type)
+     (case (second type) 8 (byte v) 16 (short v) 32 (int v) 64 (long v))
+     (byte v))))
+
+(defmethod mem/generate-deserialize ::bool [type offset segment-source-form]
+  (if (sequential? type)
+    `(~(case (second type) 8 `mem/read-byte 16 `mem/read-short 32 `mem/read-int 64 `mem/read-long) ~segment-source-form ~offset)
+    `(not (zero? (mem/read-byte ~segment-source-form ~offset)))))
+
+(defmethod mem/generate-serialize ::bool [type source-form offset segment-source-form]
+  (if (sequential? type)
+    `(~(case (second type) 8 `mem/write-byte 16 `mem/write-short 32 `mem/write-int 64 `mem/write-long)
+      ~segment-source-form
+      ~offset
+      (if ~source-form ~@(case (second type) 8 `[(byte 1) (byte 0)] 16 `[(short 1) (short 0)] 32 `[(int 1) (int 0)] 64 `[(long 1) (long 0)]))
+      )
+    `(mem/write-byte ~segment-source-form ~offset (if ~source-form (byte 1) (byte 0)))))
 
 (comment
 
