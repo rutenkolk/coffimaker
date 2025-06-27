@@ -717,9 +717,9 @@
       )
     `(mem/write-byte ~segment-source-form ~offset (if ~source-form (byte 1) (byte 0)))))
 
-(defn get-header-info-with-pointer-parameters []
+(defn get-header-info-with-pointer-parameters [header-info]
   (->>
-   raylib-header-info
+   header-info
    (filter #(= (:type %) :fn))
    (filter
     (fn [x]
