@@ -90,45 +90,47 @@
        (eval (cons `do forms)))))
 
 (defn generate-coffi-file [ns-name forms]
-  (cons
-   (list
-    `ns
-    ns-name
-    '(:require
-      [clojure.java.io :as io]
-      [clojure.string :as s]
-      [clojure.set :as sets]
-      [clojure.pprint :as pprint]
-      [clojure.edn :as edn]
-      [coffi.ffi :as ffi]
-      [coffi.mem :as mem]
-      [coffi.layout :as layout])
-    '(:import
-      (clojure.lang
-       IDeref IFn IMeta IObj IReference)
-      (java.lang.invoke
-       MethodHandle
-       MethodHandles
-       MethodType)
-      (java.lang.foreign
-       Linker
-       Linker$Option
-       FunctionDescriptor
-       AddressLayout
-       Arena
-       MemoryLayout
-       MemorySegment
-       MemorySegment$Scope
-       SegmentAllocator
-       ValueLayout
-       ValueLayout$OfByte
-       ValueLayout$OfShort
-       ValueLayout$OfInt
-       ValueLayout$OfLong
-       ValueLayout$OfChar
-       ValueLayout$OfFloat
-       ValueLayout$OfDouble)
-      (java.nio ByteOrder)))
+  (concat
+   [(list
+     `ns
+     ns-name
+     '(:require
+       [clojure.java.io :as io]
+       [clojure.string :as s]
+       [clojure.set :as sets]
+       [clojure.pprint :as pprint]
+       [clojure.edn :as edn]
+       [coffi.ffi :as ffi]
+       [coffi.mem :as mem]
+       [coffi.layout :as layout]
+       [coffimaker.core :as cm])
+     '(:import
+       (clojure.lang
+        IDeref IFn IMeta IObj IReference)
+       (java.lang.invoke
+        MethodHandle
+        MethodHandles
+        MethodType)
+       (java.lang.foreign
+        Linker
+        Linker$Option
+        FunctionDescriptor
+        AddressLayout
+        Arena
+        MemoryLayout
+        MemorySegment
+        MemorySegment$Scope
+        SegmentAllocator
+        ValueLayout
+        ValueLayout$OfByte
+        ValueLayout$OfShort
+        ValueLayout$OfInt
+        ValueLayout$OfLong
+        ValueLayout$OfChar
+        ValueLayout$OfFloat
+        ValueLayout$OfDouble)
+       (java.nio ByteOrder)))
+    `(ffi/load-library ~(str ns-name))]
    forms))
 
 (defn- copy-resource-to
