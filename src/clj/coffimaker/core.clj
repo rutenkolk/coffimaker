@@ -14,8 +14,7 @@
    [coffi.ffi :as ffi]
    [coffi.mem :as mem]
    [coffi.layout :as layout]
-   [clojure.core.async :as async]
-   )
+   [clojure.core.async :as async])
   (:import
    (clojure.lang
     IDeref IFn IMeta IObj IReference)
@@ -92,7 +91,7 @@
 (defn generate-coffi-file [ns-name forms]
   (concat
    [(list
-     `ns
+     'ns
      ns-name
      '(:require
        [clojure.java.io :as io]
@@ -130,7 +129,8 @@
         ValueLayout$OfFloat
         ValueLayout$OfDouble)
        (java.nio ByteOrder)))
-    `(ffi/load-library ~(str ns-name))]
+    `(set! *warn-on-reflection* true)
+    `(ffi/load-library ~(str ns-name ".dll"))]
    forms))
 
 (defn- copy-resource-to
