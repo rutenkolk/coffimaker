@@ -17,7 +17,7 @@
    [clojure.core.async :as async])
   (:import
    (clojure.lang
-    IDeref IFn IMeta IObj IReference)
+    IDeref IFn IMeta IObj IReference Settable)
    (java.lang.invoke
     MethodHandle
     MethodHandles
@@ -494,6 +494,14 @@
 (defn- callp [pred f v]
   (if (pred v) (f v) v))
 
+(defn unsafe-offset
+  {:inline
+   (fn unsafe-offset-inline
+     ([segment offset]
+      `(let [segment# ~segment offset# ~offset]
+         (.reinterpret (MemorySegment/ofAddress (unchecked-add (.address ^MemorySegment segment#) offset#)) Long/MAX_VALUE))))}
+  ([^MemorySegment segment ^long offset] (.reinterpret (MemorySegment/ofAddress (unchecked-add (.address segment) offset)) Long/MAX_VALUE)))
+
 (defn- gen-fn-alt [{:keys [params return-type generation-info] fn-name :name :as fn-info}]
   (if (seq (filter #(-> % :type (= ::no-str)) generation-info))
     (let [no-strs (->> generation-info
@@ -523,7 +531,8 @@
               ([kw] (kw-sym nil kw nil))
               ([pre kw] (kw-sym pre kw nil))
               ([pre kw post] (symbol (kw-str pre kw post))))
-            (reinter [x sz] `(.reinterpret ~(with-meta x {:tag 'java.lang.foreign.MemorySegment}) ~sz))]
+            (reinter [x sz] `(.reinterpret ~(with-meta x {:tag 'java.lang.foreign.MemorySegment}) ~sz))
+            (primitive-serde? [x] (and (get-method mem/generate-serialize x) (get-method mem/generate-deserialize x) (mem/primitive? x)))]
       (let [alt-ident "'"
             mut-ident "!"
 
@@ -632,7 +641,7 @@
                ~native-fn-symbol
                ~(vec (mapp mutating-symbols #(symbol (str % mut-ident)) (first arglist)))
 
-               (with-open [~'arena (mem/confined-arena)]
+               (with-open [~'arena (mem/thread-local-arena)]
                  (let ~(vec
                         (concat
 
@@ -644,49 +653,31 @@
                                              member-type (typename-conversion (ffirst %))
                                              length (symbol (il-pairmap (second %)))]
                                          [(param->name % alt-ident)
-                                          (cond
-                                            :always
-                                            `(let [~'local-segment (~(kw-sym "alloc-" member-type "-list") ~length ~'arena)
-                                                   #_(mem/alloc (* ~length ~(mem/size-of member-type)) ~'arena)]
-                                               (loop [~'xs (seq ~obj) ~'offset 0]
-                                                 (if ~'xs
-                                                   (do
-                                                     ~(if (and (get-method mem/generate-serialize member-type) (mem/primitive? member-type))
-                                                        (mem/generate-serialize member-type `(first ~'xs) 'offset 'local-segment)
-                                                        `(~(kw-sym "serialize-into-" member-type) (first ~'xs) nil ~'local-segment nil))
-                                                     (recur (next ~'xs) (+ ~'offset ~(kw-sym "size-of-" member-type))))))
-                                               ~'local-segment)
-
-                                            #_:else
-                                            #_`(mem/serialize ~obj [::mem/array ~member-type ~length] ~'arena))])))
+                                          `(let [~'local-segment (~(kw-sym "alloc-" member-type "-list") ~length ~'arena)]
+                                             (loop [~'xs (seq ~obj) ~'offset 0]
+                                               (if ~'xs
+                                                 (do
+                                                   ~(if (primitive-serde? member-type)
+                                                      (mem/generate-serialize member-type `(first ~'xs) 'offset 'local-segment)
+                                                      `(~(kw-sym "serialize-into-" member-type) (first ~'xs) nil ~'local-segment nil))
+                                                   (recur (next ~'xs) (+ ~'offset ~(kw-sym "size-of-" member-type))))))
+                                             ~'local-segment)])))
 
                          (->> serialize-params
                               (mapcat #(let [obj (callp mutating-symbols (fn [x] (symbol (str x mut-ident))) (param->name %))
                                              member-type (typename-conversion (second (first %)))]
                                          [(param->name % alt-ident)
-                                          (cond
-                                            :always
-                                            #_(get-method mem/generate-serialize member-type)
-                                            `(let [~'local-segment (~(kw-sym "alloc-" member-type) ~'arena)]
-                                               ~(if (and (get-method mem/generate-serialize member-type) (mem/primitive? member-type))
-                                                    (mem/generate-serialize member-type obj 0 'local-segment)
-                                                    `(~(kw-sym "serialize-into-" member-type) ~obj nil ~'local-segment nil))
-                                               ~'local-segment)
-
-                                            #_:else
-                                            #_`(mem/serialize ~obj ~member-type ~'arena))])))
+                                          `(let [~'local-segment (~(kw-sym "alloc-" member-type) ~'arena)]
+                                             ~(if (primitive-serde? member-type)
+                                                (mem/generate-serialize member-type obj 0 'local-segment)
+                                                `(~(kw-sym "serialize-into-" member-type) ~obj nil ~'local-segment nil))
+                                             ~'local-segment)])))
 
                          (->> olp-params (mapcat #(vector (param->name % alt-ident) `(~(kw-sym "alloc-" ::mem/pointer) ~'arena))))
 
                          (->> alloc-params
                               (mapcat #(let [member-type (typename-conversion (second (first %)))]
-                                         [(param->name % alt-ident)
-                                          (cond
-                                            (try (mem/size-of member-type) (catch Exception _ nil))
-                                            `(mem/alloc ~(mem/size-of member-type) ~'arena)
-
-                                            :else
-                                            `(~(kw-sym "alloc-" member-type) ~'arena))])))
+                                         [(param->name % alt-ident) `(~(kw-sym "alloc-" member-type) ~'arena)])))
 
                          ['return-value-raw native-fn-call]
 
@@ -695,54 +686,40 @@
                                              t (typename-conversion (second (first %)))]
                                          [(param->name %)
                                           (cond
-                                            (and (get-method mem/generate-deserialize t) (mem/primitive? t))
+                                            (primitive-serde? t)
                                             (mem/generate-deserialize t 0 (reinter obj (mem/size-of t)))
 
                                             :else
-                                            `(~(kw-sym "deserialize-from-" t) ~(reinter obj (kw-sym "size-of-" t)) nil)
-                                            #_`(mem/deserialize-from (.reinterpret ~obj (mem/size-of ~t)) ~t))])))
+                                            `(~(kw-sym "deserialize-from-" t) ~(reinter obj (kw-sym "size-of-" t)) nil))])))
 
                          ['return-value
                           (if return-list?
                             (let [member-type (typename-conversion (second return-type))
                                   length (symbol (first rlc-args))
                                   t `[::mem/array ~member-type ~length]
-                                  loop-deserialize (if (and (get-method mem/generate-deserialize member-type) (mem/primitive? member-type))
-                                                     (mem/generate-deserialize
-                                                      member-type
-                                                      `(* ~(mem/size-of member-type) ~'i)
-                                                      (reinter 'return-value-raw `(* ~length ~(mem/size-of member-type))))
-
-                                                     `(~(kw-sym "deserialize-from-" member-type)
-                                                       ~(reinter 'return-value-raw `(* ~length ~(kw-sym "size-of-" member-type)))
-                                                       nil))
-                                  ]
-                              (cond
-                                        ;the generate deserialize will propagate the offset and ruin everything.
-                                        ;i should *really* just get the impl method of mem/deserialize-from for the member type and call that.
-                                        ;this inline shit is killing me
-                                :always
-                                `(loop [~'i 0 ~'v (transient [])]
-                                   (if (< ~'i ~length)
-                                     (recur (unchecked-inc ~'i) (conj! ~'v ~loop-deserialize))
-                                     (persistent! ~'v)))
-
-                                #_:else
-                                #_`(mem/deserialize (.reinterpret ^MemorySegment ~'return-value-raw (mem/size-of ~t)) ~t)))
+                                  segment (reinter 'return-value-raw `(* ~length ~(kw-sym "size-of-" member-type)))
+                                  loop-deserialize (if (primitive-serde? member-type)
+                                                     (mem/generate-deserialize member-type `(* ~(mem/size-of member-type) ~'i) segment)
+                                                     `(~(kw-sym "deserialize-from-" member-type) ~segment nil))]
+                              `(loop [~'i 0 ~'v (transient [])]
+                                 (if (< ~'i ~length)
+                                   (recur (unchecked-inc ~'i) (conj! ~'v ~loop-deserialize))
+                                   (persistent! ~'v))))
                             'return-value-raw)]
 
                          (->> olp-params
                               (mapcat #(let [member-type (typename-conversion (get-in % [0 1 1]))
                                              length (symbol (ol-pairmap (second %)))
                                              t `[::mem/array ~member-type ~length]
+                                             size (kw-sym "size-of-" member-type)
+                                             segment-form (reinter (param->name % alt-ident) `(* ~length ~size))
+                                             segment (gensym "segment")
                                              loop-deserialize (if (and (get-method mem/generate-deserialize member-type) (mem/primitive? member-type))
                                                                 (mem/generate-deserialize
                                                                  member-type
-                                                                 `(* ~(mem/size-of member-type) ~'i)
-                                                                 (reinter (param->name % alt-ident) `(* ~length ~(mem/size-of member-type))))
-                                                                `(~(kw-sym "deserialize-from-" member-type)
-                                                                  ~(reinter (param->name % alt-ident) `(* ~length ~(kw-sym "size-of-" member-type)))
-                                                                 nil)
+                                                                 `(* ~size ~'i)
+                                                                 segment)
+                                                                `(~(kw-sym "deserialize-from-" member-type) ~segment nil)
 
                                                                   )
 
