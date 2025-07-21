@@ -700,7 +700,7 @@
                                   segment (reinter 'return-value-raw `(* ~length ~(kw-sym "size-of-" member-type)))
                                   loop-deserialize (if (primitive-serde? member-type)
                                                      (mem/generate-deserialize member-type `(* ~(mem/size-of member-type) ~'i) segment)
-                                                     `(~(kw-sym "deserialize-from-" member-type) ~segment nil))]
+                                                     `(~(kw-sym "deserialize-from-" member-type) (unsafe-offset ~segment (* ~(kw-sym "size-of-" member-type) ~'i)) nil))]
                               `(loop [~'i 0 ~'v (transient [])]
                                  (if (< ~'i ~length)
                                    (recur (unchecked-inc ~'i) (conj! ~'v ~loop-deserialize))
@@ -719,22 +719,13 @@
                                                                  member-type
                                                                  `(* ~size ~'i)
                                                                  segment)
-                                                                `(~(kw-sym "deserialize-from-" member-type) ~segment nil)
 
-                                                                  )
-
-                                             ]
+                                                                `(~(kw-sym "deserialize-from-" member-type) (unsafe-offset ~segment-form (* ~size ~'i)) nil))]
                                          [(param->name %)
-                                          (cond
-                                            :always
-                                            #_(get-method mem/generate-deserialize member-type)
-                                            `(loop [~'i 0 ~'v (transient [])]
-                                               (if (< ~'i ~length)
-                                                 (recur (unchecked-inc ~'i) (conj! ~'v ~loop-deserialize))
-                                                 (persistent! ~'v)))
-
-                                            #_:else
-                                            #_`(mem/deserialize-from (.reinterpret ~(param->name % alt-ident) (mem/size-of ~t)) ~t))])))))
+                                          `(loop [~'i 0 ~'v (transient [])]
+                                             (if (< ~'i ~length)
+                                               (recur (unchecked-inc ~'i) (conj! ~'v ~loop-deserialize))
+                                               (persistent! ~'v)))])))))
                    ~(cond
                       (= 1 (count return-map)) (first (vals return-map))
                       (= 0 (count return-map)) nil
