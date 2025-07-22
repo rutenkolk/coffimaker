@@ -1,0 +1,6 @@
+# Coffimaker
+
+Coffimaker is an experimental binding generator for the coffi library.
+It generates coffi binding code based on a c-header.
+
+More detailed description, documentation and more coming soon.
