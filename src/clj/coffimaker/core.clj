@@ -717,7 +717,7 @@
 
 (defn gen-fn [fn-info]
   (cond
-    (::exclude (:generation-info fn-info)) nil
+    (::exclude (set (map :type (:generation-info fn-info)))) nil
     (seq (:generation-info fn-info)) (gen-fn-alt fn-info)
     :else (gen-fn-simple fn-info)))
 
@@ -761,39 +761,41 @@
 (defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
 
 (defn- transform-argmod [argmod]
-  (if (seqable? (first argmod))
-      (mapv transform-argmod argmod)
-      (let [replacement-map {:! ::mutate :mutate ::mutate :in ::in :out ::out :as-array ::as-array :with-ptr ::with-ptr :- ::exclude}
-         [pre-opts [pre-a b]] (split-at (- (count argmod) 2) argmod)
-         a (get {:! ::mutate} pre-a pre-a)
-         opts (->> pre-opts (map #(get replacement-map % %)) set)]
-     (cond
-       (::exclude opts) {:type ::exclude}
+  (cond
+    (not (sequential? argmod)) (transform-argmod [argmod])
+    (sequential? (first argmod)) (mapv transform-argmod argmod)
+    :else
+    (let [replacement-map {:! ::mutate :mutate ::mutate :in ::in :out ::out :as-array ::as-array :with-ptr ::with-ptr :- ::exclude}
+          [pre-opts [pre-a b]] (split-at (- (count argmod) 2) (if (not (sequential? argmod)) [argmod] argmod))
+          a (get replacement-map pre-a pre-a)
+          opts (->> pre-opts (map #(get replacement-map % %)) set)]
+      (cond
+        (or (::exclude opts) (= a ::exclude)) {:type ::exclude}
 
 
-       (and (empty? opts) (= a ::no-str)) {:type ::no-str :argument b}
+        (and (empty? opts) (= a ::no-str)) {:type ::no-str :argument b}
 
-       (or (and (empty? opts) (-> a namespace nil?))
-           (::in opts))
-       {:type ::in-list :pointer-argument a :count-argument b}
+        (or (and (empty? opts) (-> a namespace nil?))
+            (::in opts))
+        {:type ::in-list :pointer-argument a :count-argument b}
 
-       (and (empty? opts) (= a ::mutate))
-       {:type ::mutating-argument :argument b}
+        (and (empty? opts) (= a ::mutate))
+        {:type ::mutating-argument :argument b}
 
-       (and (empty? opts) (= a ::out))
-       {:type ::out-argument :argument b}
+        (and (empty? opts) (= a ::out))
+        {:type ::out-argument :argument b}
 
-       (and (::out opts) (namespace a) (-> a name (= "return")))
-       (cond-> {:type ::return-list :count-argument b}
-         (::as-array opts) (assoc :as-array true)
-         (::with-ptr opts) (assoc :with-ptr true))
+        (and (::out opts) (namespace a) (-> a name (= "return")))
+        (cond-> {:type ::return-list :count-argument b}
+          (::as-array opts) (assoc :as-array true)
+          (::with-ptr opts) (assoc :with-ptr true))
 
-       (::out opts)
-       (cond-> {:type ::out-list :pointer-argument a :count-argument b}
-         (::as-array opts) (assoc :as-array true)
-         (::with-ptr opts) (assoc :with-ptr true))
+        (::out opts)
+        (cond-> {:type ::out-list :pointer-argument a :count-argument b}
+          (::as-array opts) (assoc :as-array true)
+          (::with-ptr opts) (assoc :with-ptr true))
 
-       :else argmod))))
+        :else argmod))))
 
 (defn add-generation-info [generation-info header-info]
   (let [processed-info (-> generation-info (update-vals transform-argmod) (update-vals #(if (sequential? %) % [%])))]
