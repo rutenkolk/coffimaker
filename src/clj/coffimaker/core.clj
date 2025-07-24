@@ -347,8 +347,7 @@
   `(mem/defstruct ~(symbol (clojure.core/name name)) ~(vec (reduce concat (map (fn [[type name]] [(symbol (clojure.core/name name)) (typename-conversion type)]) members)))))
 
 (defn gen-alias [{:keys [name alias-of] :as v}]
-  `(mem/defalias ~name ~(typename-conversion alias-of))
-  )
+  `(mem/defalias ~name ~(typename-conversion alias-of)))
 
 (defn gen-opaque [{:keys [name] :as v}]
   `(mem/defalias ~name ~:coffi.mem/void))
@@ -360,22 +359,7 @@
     [((case kind
         :struct gen-struct
         :alias gen-alias
-        :opaque gen-opaque) v)
-
-     #_`(def ~(lsym "size-of") (mem/size-of ~tname))
-     #_`(def ~(lsym "align-of") (mem/align-of ~tname))
-     #_`(defn ~(lsym "alloc")
-        ([] (mem/alloc ~(lsym "size-of")))
-        (~['arena] (mem/alloc ~(lsym "size-of") ~'arena)))
-     #_`(let [ser# (get-method mem/serialize-into ~tname)]
-        (defn ~(lsym "serialize")
-         (~['x] (~(lsym "serialize") ~'x (mem/auto-arena)))
-         (~['x 'arena] (let [~'seg (mem/alloc ~(lsym "size-of") ~'arena)]
-                         (ser# ~'x nil ~'seg nil)
-                         ~'seg))))
-     #_`(let [de# (get-method mem/deserialize-from ~tname)]
-        (defn ~(lsym "deserialize")
-          ~['x] (de# ~'x nil)))]))
+        :opaque gen-opaque) v)]))
 
 (defn- argtype-to-str [v]
   (cond
