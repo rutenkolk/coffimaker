@@ -297,7 +297,7 @@
    ::mem/long      'longs
    ::mem/pointer   'longs})
 
-(defn coffitype->class [typename]
+(defn- coffitype->class [typename]
   (get primitive-class-conversion typename
        (cond
          (and (vector? typename) (= ::mem/array (first typename))) (array-types-conversion (second typename))
@@ -328,7 +328,7 @@
     (= kind :bool) `(def ~(vary-meta (symbol (clojure.core/name name)) assoc :const true) ~(case value 0 false 1 true value))
     :else `(def ~(vary-meta (symbol (clojure.core/name name)) assoc :const true) ~value)))
 
-(defn coffitype-to-array-fn [_type]
+(defn- coffitype-to-array-fn [_type]
   (get
    {:coffi.mem/byte   `byte-array
     :coffi.mem/short  `short-array
@@ -393,7 +393,7 @@
        ~(vec (reduce concat (partition 1 2 (memberlist-typename-conversion params))))
        ~(pointer-erasure (typename-conversion return-type)))))
 
-(defn mapp [pred f coll]
+(defn- mapp [pred f coll]
   (map #(if (pred %) (f %) %) coll))
 
 (defn- in-list-info [generation-info]
