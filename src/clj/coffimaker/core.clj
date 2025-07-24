@@ -17,7 +17,7 @@
    [clojure.core.async :as async])
   (:import
    (clojure.lang
-    IDeref IFn IMeta IObj IReference Settable)
+    IDeref IFn IMeta IObj IReference Settable Named)
    (java.lang.invoke
     MethodHandle
     MethodHandles
@@ -730,6 +730,15 @@
   `(ffi/defvar ~(symbol (clojure.core/name name)) ~(clojure.core/name name) ~(typename-conversion kind)))
 (defmethod generate-form :extern-const [{:keys [name kind]}]
   `(ffi/defvar ~(symbol (clojure.core/name name)) ~(clojure.core/name name) ~(typename-conversion kind)))
+
+(defn change-ns-walk [from to form]
+  (clojure.walk/postwalk
+   (fn [x]
+     (let [nspace (if (instance? Named x) (namespace x))
+           n (if (instance? Named x) (name x))
+           f (if (keyword? x) keyword symbol)]
+       (if (= nspace (str from)) (f (str to) n) x)))
+   form))
 
 (defn generate-from-header-info [header-info]
   (->> header-info
