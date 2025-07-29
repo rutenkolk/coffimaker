@@ -104,7 +104,6 @@
        [coffi.ffi :as ffi]
        [coffi.mem :as mem]
        [coffi.layout :as layout]
-       [coffimaker.core :as cm]
        [coffimaker.runtime :as runtime])
      '(:import
        (clojure.lang
