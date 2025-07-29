@@ -61,7 +61,7 @@
             '[~'coffi.ffi :as ~'ffi]
             '[~'coffi.mem :as ~'mem]
             '[~'coffi.layout :as ~'layout]
-            '[~'coffi.runtime :as ~'runtime])
+            '[~'coffimaker.runtime :as ~'runtime])
            (import
             '(~'clojure.lang
               ~'IDeref ~'IFn ~'IMeta ~'IObj ~'IReference)
@@ -105,7 +105,7 @@
        [coffi.mem :as mem]
        [coffi.layout :as layout]
        [coffimaker.core :as cm]
-       [coffi.runtime :as runtime])
+       [coffimaker.runtime :as runtime])
      '(:import
        (clojure.lang
         IDeref IFn IMeta IObj IReference)
