@@ -46,6 +46,8 @@
 (defn- ffilter [pred coll]
   (some #(when (pred %) %) coll))
 
+(defn- remove-meta [form] (clojure.walk/postwalk (fn [x] (if (meta x) (with-meta x {}) x)) form))
+
 (defn doall-with-coffi-ns [ns-name forms]
   (do
     (create-ns ns-name)
@@ -92,47 +94,48 @@
 
 (defn generate-coffi-file [ns-name forms]
   (concat
-   [(list
-     'ns
-     ns-name
-     '(:require
-       [clojure.java.io :as io]
-       [clojure.string :as s]
-       [clojure.set :as sets]
-       [clojure.pprint :as pprint]
-       [clojure.edn :as edn]
-       [coffi.ffi :as ffi]
-       [coffi.mem :as mem]
-       [coffi.layout :as layout]
-       [coffimaker.runtime :as runtime])
-     '(:import
-       (clojure.lang
-        IDeref IFn IMeta IObj IReference)
-       (java.lang.invoke
-        MethodHandle
-        MethodHandles
-        MethodType)
-       (java.lang.foreign
-        Linker
-        Linker$Option
-        FunctionDescriptor
-        AddressLayout
-        Arena
-        MemoryLayout
-        MemorySegment
-        MemorySegment$Scope
-        SegmentAllocator
-        ValueLayout
-        ValueLayout$OfByte
-        ValueLayout$OfShort
-        ValueLayout$OfInt
-        ValueLayout$OfLong
-        ValueLayout$OfChar
-        ValueLayout$OfFloat
-        ValueLayout$OfDouble)
-       (java.nio ByteOrder)))
-    `(set! *warn-on-reflection* true)
-    `(ffi/load-library ~(str ns-name ".dll"))]
+   (remove-meta
+    [(list
+      'ns
+      ns-name
+      '(:require
+        [clojure.java.io :as io]
+        [clojure.string :as s]
+        [clojure.set :as sets]
+        [clojure.pprint :as pprint]
+        [clojure.edn :as edn]
+        [coffi.ffi :as ffi]
+        [coffi.mem :as mem]
+        [coffi.layout :as layout]
+        [coffimaker.runtime :as runtime])
+      '(:import
+        (clojure.lang
+         IDeref IFn IMeta IObj IReference)
+        (java.lang.invoke
+         MethodHandle
+         MethodHandles
+         MethodType)
+        (java.lang.foreign
+         Linker
+         Linker$Option
+         FunctionDescriptor
+         AddressLayout
+         Arena
+         MemoryLayout
+         MemorySegment
+         MemorySegment$Scope
+         SegmentAllocator
+         ValueLayout
+         ValueLayout$OfByte
+         ValueLayout$OfShort
+         ValueLayout$OfInt
+         ValueLayout$OfLong
+         ValueLayout$OfChar
+         ValueLayout$OfFloat
+         ValueLayout$OfDouble)
+        (java.nio ByteOrder)))
+     `(set! *warn-on-reflection* true)
+     `(ffi/load-library ~(str ns-name ".dll"))])
    forms))
 
 (defn- copy-resource-to
