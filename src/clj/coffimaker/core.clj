@@ -14,6 +14,7 @@
    [coffi.ffi :as ffi]
    [coffi.mem :as mem]
    [coffi.layout :as layout]
+   [coffimaker.runtime :as runtime]
    [clojure.core.async :as async])
   (:import
    (clojure.lang
@@ -59,7 +60,8 @@
             '[~'clojure.edn :as ~'edn]
             '[~'coffi.ffi :as ~'ffi]
             '[~'coffi.mem :as ~'mem]
-            '[~'coffi.layout :as ~'layout])
+            '[~'coffi.layout :as ~'layout]
+            '[~'coffi.runtime :as ~'runtime])
            (import
             '(~'clojure.lang
               ~'IDeref ~'IFn ~'IMeta ~'IObj ~'IReference)
@@ -102,7 +104,8 @@
        [coffi.ffi :as ffi]
        [coffi.mem :as mem]
        [coffi.layout :as layout]
-       [coffimaker.core :as cm])
+       [coffimaker.core :as cm]
+       [coffi.runtime :as runtime])
      '(:import
        (clojure.lang
         IDeref IFn IMeta IObj IReference)
@@ -478,14 +481,6 @@
 (defn- callp [pred f v]
   (if (pred v) (f v) v))
 
-(defn unsafe-offset
-  {:inline
-   (fn unsafe-offset-inline
-     ([segment offset]
-      `(let [segment# ~segment offset# ~offset]
-         (.reinterpret (MemorySegment/ofAddress (unchecked-add (.address ^MemorySegment segment#) offset#)) Long/MAX_VALUE))))}
-  ([^MemorySegment segment ^long offset] (.reinterpret (MemorySegment/ofAddress (unchecked-add (.address segment) offset)) Long/MAX_VALUE)))
-
 (defn- gen-fn-alt [{:keys [params return-type generation-info] fn-name :name :as fn-info}]
   (if (seq (filter #(-> % :type (= ::no-str)) generation-info))
     (let [no-strs (->> generation-info
@@ -684,7 +679,7 @@
                                   segment (reinter 'return-value-raw `(* ~length ~(kw-sym "size-of-" member-type)))
                                   loop-deserialize (if (primitive-serde? member-type)
                                                      (mem/generate-deserialize member-type `(* ~(mem/size-of member-type) ~'i) segment)
-                                                     `(~(kw-sym "deserialize-from-" member-type) (unsafe-offset ~segment (* ~(kw-sym "size-of-" member-type) ~'i)) nil))]
+                                                     `(~(kw-sym "deserialize-from-" member-type) (runtime/unsafe-offset ~segment (* ~(kw-sym "size-of-" member-type) ~'i)) nil))]
                               `(loop [~'i 0 ~'v (transient [])]
                                  (if (< ~'i ~length)
                                    (recur (unchecked-inc ~'i) (conj! ~'v ~loop-deserialize))
@@ -704,7 +699,7 @@
                                                                  `(* ~size ~'i)
                                                                  segment)
 
-                                                                `(~(kw-sym "deserialize-from-" member-type) (unsafe-offset ~segment-form (* ~size ~'i)) nil))]
+                                                                `(~(kw-sym "deserialize-from-" member-type) (runtime/unsafe-offset ~segment-form (* ~size ~'i)) nil))]
                                          [(param->name %)
                                           `(loop [~'i 0 ~'v (transient [])]
                                              (if (< ~'i ~length)
@@ -756,10 +751,6 @@
 (defn remove-missing-symbol-declarations [header-info]
   (filterv (comp not (->> header-info find-all-header-symbols (remove second) (map first) set) :name) header-info))
 
-(defmethod mem/generate-deserialize :coffi.ffi/fn [_type offset segment-source-form] `(mem/deserialize* (mem/read-address ~segment-source-form ~offset) ~_type))
-(defmethod mem/generate-serialize :coffi.ffi/fn [_type source-form offset segment-source-form] `(mem/write-address ~segment-source-form ~offset (mem/serialize* ~source-form ~_type (mem/auto-arena))))
-(defmethod mem/deserialize-from ::mem/c-string [segment _] (mem/deserialize* segment ::mem/c-string))
-
 (defn- transform-argmod [argmod]
   (cond
     (not (sequential? argmod)) (transform-argmod [argmod])
@@ -800,38 +791,6 @@
 (defn add-generation-info [generation-info header-info]
   (let [processed-info (-> generation-info (update-vals transform-argmod) (update-vals #(if (sequential? %) % [%])))]
     (map #(or (some->> % :name processed-info (assoc % :generation-info)) %) header-info)))
-
-(defmethod mem/primitive-type ::bool [type]
-  (if (sequential? type)
-    (case (second type) 8 ::mem/byte 16 ::mem/short 32 ::mem/int 64 ::mem/long)
-    ::mem/byte))
-
-(defmethod mem/c-layout ::bool [type]
-  (if (sequential? type)
-    (case (second type) 8 mem/byte-layout 16 mem/short-layout 32 mem/int-layout 64 mem/long-layout)
-    mem/byte-layout))
-
-(defmethod mem/deserialize* ::bool [obj _type] (not (zero? obj)))
-
-(defmethod mem/serialize* ::bool [obj type _arena]
-  (let [v (if obj 1 0)]
-   (if (sequential? type)
-     (case (second type) 8 (byte v) 16 (short v) 32 (int v) 64 (long v))
-     (byte v))))
-
-(defmethod mem/generate-deserialize ::bool [type offset segment-source-form]
-  (if (sequential? type)
-    `(~(case (second type) 8 `mem/read-byte 16 `mem/read-short 32 `mem/read-int 64 `mem/read-long) ~segment-source-form ~offset)
-    `(not (zero? (mem/read-byte ~segment-source-form ~offset)))))
-
-(defmethod mem/generate-serialize ::bool [type source-form offset segment-source-form]
-  (if (sequential? type)
-    `(~(case (second type) 8 `mem/write-byte 16 `mem/write-short 32 `mem/write-int 64 `mem/write-long)
-      ~segment-source-form
-      ~offset
-      (if ~source-form ~@(case (second type) 8 `[(byte 1) (byte 0)] 16 `[(short 1) (short 0)] 32 `[(int 1) (int 0)] 64 `[(long 1) (long 0)]))
-      )
-    `(mem/write-byte ~segment-source-form ~offset (if ~source-form (byte 1) (byte 0)))))
 
 (defn get-header-info-with-pointer-parameters [header-info]
   (->>
