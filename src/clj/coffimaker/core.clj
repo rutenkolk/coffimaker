@@ -251,7 +251,7 @@
 (defn- u8      [name] [name ::mem/byte])
 (defn- u16     [name] [name ::mem/short])
 (defn- u32     [name] [name ::mem/int])
-(defn- bool    [name] [name ::bool])
+(defn- bool    [name] [name ::runtime/bool])
 (defn- pointer [name] [name ::mem/pointer])
 
 
@@ -271,7 +271,7 @@
    :u16            ::mem/short
    :u32            ::mem/int
    :u64            ::mem/long
-   :bool           ::bool
+   :bool           ::runtime/bool
    [:pointer :u8]  ::mem/c-string
    :pointer        ::mem/pointer
    :void-pointer   ::mem/pointer
